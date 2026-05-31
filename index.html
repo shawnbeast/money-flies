@@ -110,6 +110,7 @@ let showCardModal = false;
 let editingCard = null;
 let showPayrollModal = false;
 let editingPayroll = null;
+let showMenu = false; // "More" nav dropdown
 // Dashboard time-period filter (independent of the header month picker).
 let dashPeriod = { mode: 'month', preset: 'thisMonth', month: new Date().toISOString().slice(0, 7), start: null, end: null };
 let chartInstances = {};
@@ -361,13 +362,30 @@ function buildLayout() {
     </header>
 
     <!-- Nav tabs -->
-    <nav class="glass border-b border-slate-700/50 px-6 flex gap-1 py-2 sticky top-[73px] z-10 overflow-x-auto">
-      ${['dashboard','expenses','trips','cards','income','budgets','analytics'].map(t => `
+    <nav class="glass border-b border-slate-700/50 px-6 flex gap-1 py-2 sticky top-[73px] z-10">
+      ${['dashboard','expenses'].map(t => `
         <button onclick="switchTab('${t}')" class="px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${activeTab === t ? 'tab-active text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700/50'}">
-          ${t === 'dashboard' ? '📊 Dashboard' : t === 'expenses' ? '📋 Expenses' : t === 'trips' ? '✈️ Trips' : t === 'cards' ? '💳 Cards' : t === 'income' ? '💵 Income' : t === 'budgets' ? '🎯 Budgets' : '📈 Analytics'}
+          ${tabLabel(t)}
         </button>
       `).join('')}
+      ${(() => {
+        const moreTabs = ['trips','cards','income','budgets','analytics'];
+        const moreActive = moreTabs.includes(activeTab);
+        return `
+        <div class="relative">
+          <button onclick="toggleMenu(event)" class="px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap flex items-center gap-1 ${moreActive ? 'tab-active text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700/50'}">
+            ${moreActive ? tabLabel(activeTab) : 'More'} <span class="text-xs transition-transform ${showMenu?'rotate-180':''}">▾</span>
+          </button>
+          ${showMenu ? `
+            <div class="absolute left-0 mt-1 w-44 card rounded-xl shadow-xl border border-slate-600 py-1 z-30">
+              ${moreTabs.map(t => `
+                <button onclick="switchTab('${t}')" class="w-full text-left px-4 py-2 text-sm transition-colors ${activeTab===t ? 'text-indigo-400 bg-slate-700/40' : 'text-slate-300 hover:bg-slate-700/50'}">${tabLabel(t)}</button>
+              `).join('')}
+            </div>` : ''}
+        </div>`;
+      })()}
     </nav>
+    ${showMenu ? `<div class="fixed inset-0 z-20" onclick="closeMenu()"></div>` : ''}
 
     <!-- Content -->
     <main class="flex-1 p-6 max-w-7xl mx-auto w-full">
@@ -1317,7 +1335,13 @@ function attachEvents() {
   if (mp) mp.addEventListener('change', e => { activeMonth = e.target.value; render(); });
 }
 
-function switchTab(tab) { activeTab = tab; if (tab !== 'expenses') activeGroupFilter = null; render(); }
+function tabLabel(t) {
+  return { dashboard:'📊 Dashboard', expenses:'📋 Expenses', trips:'✈️ Trips', cards:'💳 Cards', income:'💵 Income', budgets:'🎯 Budgets', analytics:'📈 Analytics' }[t] || t;
+}
+function toggleMenu(event) { event.stopPropagation(); showMenu = !showMenu; render(); }
+function closeMenu() { showMenu = false; render(); }
+
+function switchTab(tab) { activeTab = tab; showMenu = false; if (tab !== 'expenses') activeGroupFilter = null; render(); }
 
 function setPreset(id) {
   const now = new Date();
