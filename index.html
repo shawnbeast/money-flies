@@ -1,0 +1,1603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Money Flies</title>
+<!-- Mobile / installable (Add to Home Screen) -->
+<meta name="theme-color" content="#0f172a" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Money Flies" />
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="icon.svg" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  body { background: #0f172a; font-family: 'Inter', system-ui, sans-serif; }
+  .glass { background: rgba(255,255,255,0.05); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.08); }
+  .card { background: #1e293b; border: 1px solid #334155; }
+  .input-field { background: #0f172a; border: 1px solid #334155; color: #f1f5f9; }
+  .input-field:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,0.2); }
+  .btn-primary { background: linear-gradient(135deg, #6366f1, #8b5cf6); }
+  .btn-primary:hover { background: linear-gradient(135deg, #4f46e5, #7c3aed); }
+  .btn-danger:hover { background: #ef4444; }
+  .tab-active { background: linear-gradient(135deg, #6366f1, #8b5cf6); }
+  .progress-bar { background: #1e293b; border-radius: 9999px; overflow: hidden; }
+  .scrollbar-thin::-webkit-scrollbar { width: 4px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 9999px; }
+  .modal-bg { background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); }
+  select option { background: #1e293b; }
+  ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #0f172a; } ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+</style>
+</head>
+<body class="min-h-screen text-slate-100">
+
+<div id="app"></div>
+
+<script>
+// ─── Data layer ───────────────────────────────────────────────────────────────
+const STORAGE_KEY = 'budget_tracker_v1';
+
+const DEFAULT_CATEGORIES = [
+  { id: 'food',        name: 'Food & Dining',    color: '#f59e0b', icon: '🍔', budget: 500  },
+  { id: 'transport',   name: 'Transport',         color: '#3b82f6', icon: '🚗', budget: 200  },
+  { id: 'shopping',    name: 'Shopping',          color: '#ec4899', icon: '🛍️', budget: 300  },
+  { id: 'health',      name: 'Health',            color: '#10b981', icon: '💊', budget: 150  },
+  { id: 'entertainment', name: 'Entertainment',   color: '#8b5cf6', icon: '🎮', budget: 200  },
+  { id: 'utilities',   name: 'Utilities',         color: '#06b6d4', icon: '⚡', budget: 250  },
+  { id: 'rent',        name: 'Rent / Housing',    color: '#f97316', icon: '🏠', budget: 1500 },
+  { id: 'savings',     name: 'Savings',           color: '#22c55e', icon: '💰', budget: 400  },
+  { id: 'other',       name: 'Other',             color: '#94a3b8', icon: '📦', budget: 100  },
+];
+
+// Currency definitions and fallback exchange rates (per 1 USD), refreshed live on load.
+const CURRENCIES = {
+  CAD: { symbol: 'C$', name: 'Canadian Dollar' },
+  USD: { symbol: 'US$', name: 'US Dollar' },
+  EUR: { symbol: '€',  name: 'Euro' },
+  GBP: { symbol: '£',  name: 'British Pound' },
+  JPY: { symbol: '¥',  name: 'Japanese Yen' },
+  AUD: { symbol: 'A$', name: 'Australian Dollar' },
+  CHF: { symbol: 'Fr', name: 'Swiss Franc' },
+  CNY: { symbol: '¥',  name: 'Chinese Yuan' },
+  INR: { symbol: '₹',  name: 'Indian Rupee' },
+  MXN: { symbol: 'Mex$', name: 'Mexican Peso' },
+  BRL: { symbol: 'R$', name: 'Brazilian Real' },
+};
+const FALLBACK_RATES = { USD:1, EUR:0.92, GBP:0.79, JPY:157, CAD:1.36, AUD:1.52, CHF:0.88, CNY:7.24, INR:83.3, MXN:18.6, BRL:5.43 };
+
+function loadData() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (!parsed.groups) parsed.groups = []; // migrate older saves
+      if (!parsed.cards) parsed.cards = [];
+      if (!parsed.payrolls) parsed.payrolls = [];
+      if (!parsed.baseCurrency) parsed.baseCurrency = 'CAD';
+      if (!parsed.rates) parsed.rates = { base: 'USD', table: { ...FALLBACK_RATES }, fetchedAt: null };
+      // migrate expenses to carry original currency (legacy = stored in base)
+      (parsed.expenses || []).forEach(e => {
+        if (e.currency == null) e.currency = parsed.baseCurrency || 'CAD';
+        if (e.origAmount == null) e.origAmount = e.amount;
+      });
+      return parsed;
+    }
+  } catch(e) {}
+  return { expenses: [], categories: DEFAULT_CATEGORIES, income: 3000, groups: [], cards: [], payrolls: [],
+           baseCurrency: 'CAD', rates: { base: 'USD', table: { ...FALLBACK_RATES }, fetchedAt: null } };
+}
+
+function saveData(data) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+}
+
+let data = loadData();
+let activeTab = 'dashboard';
+let activeMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+let showExpenseModal = false;
+let editingExpense = null;
+let showCategoryModal = false;
+let editingCategory = null;
+let showGroupModal = false;
+let editingGroup = null;
+let activeGroupFilter = null; // when viewing a single trip's expenses
+let showCardModal = false;
+let editingCard = null;
+let showPayrollModal = false;
+let editingPayroll = null;
+// Dashboard time-period filter (independent of the header month picker).
+let dashPeriod = { mode: 'month', preset: 'thisMonth', month: new Date().toISOString().slice(0, 7), start: null, end: null };
+let chartInstances = {};
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function uuid() { return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2); }
+
+function formatCurrency(n, cur) {
+  cur = cur || data.baseCurrency;
+  const sym = (CURRENCIES[cur] || {}).symbol || cur + ' ';
+  const dec = cur === 'JPY' ? 0 : 2;
+  return sym + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
+}
+
+// Convert an amount from `fromCur` into the current base currency using the cached rate table.
+function toBase(amount, fromCur) {
+  const base = data.baseCurrency;
+  if (!fromCur || fromCur === base) return amount;
+  const t = data.rates.table || FALLBACK_RATES;
+  const rFrom = t[fromCur], rBase = t[base];
+  if (!rFrom || !rBase) return amount; // unknown rate → assume already base
+  // table is per-1-base-of-rates.base; convert via that pivot
+  return amount * (rBase / rFrom);
+}
+
+// Fetch live rates (no API key needed) pivoted to USD, then re-render.
+async function refreshRates() {
+  try {
+    const res = await fetch('https://api.frankfurter.app/latest?from=USD');
+    if (!res.ok) throw new Error('rate fetch failed');
+    const json = await res.json();
+    const table = { USD: 1, ...json.rates };
+    // keep only currencies we support, fall back for any missing
+    const finalTable = {};
+    Object.keys(CURRENCIES).forEach(c => { finalTable[c] = table[c] != null ? table[c] : FALLBACK_RATES[c]; });
+    data.rates = { base: 'USD', table: finalTable, fetchedAt: new Date().toISOString() };
+    saveData(data);
+    render();
+  } catch (e) {
+    // offline or blocked → silently keep fallback/cached rates
+  }
+}
+
+// Value of an expense in the current base currency (recomputed live so changing base/rates is correct).
+function expenseBase(e) {
+  return toBase(e.origAmount != null ? e.origAmount : e.amount, e.currency || data.baseCurrency);
+}
+
+function getMonthExpenses(month) {
+  return data.expenses.filter(e => e.date.startsWith(month));
+}
+
+function getCategoryById(id) {
+  return data.categories.find(c => c.id === id) || { name: 'Unknown', color: '#94a3b8', icon: '📦' };
+}
+
+function getGroupById(id) {
+  return data.groups.find(g => g.id === id) || null;
+}
+
+function getGroupExpenses(groupId) {
+  return data.expenses.filter(e => e.groupId === groupId);
+}
+
+function getGroupStats(groupId) {
+  const exps = getGroupExpenses(groupId);
+  const total = exps.reduce((s, e) => s + expenseBase(e), 0);
+  const byCategory = {};
+  exps.forEach(e => { byCategory[e.categoryId] = (byCategory[e.categoryId] || 0) + expenseBase(e); });
+  const dates = exps.map(e => e.date).sort();
+  return { total, byCategory, count: exps.length, first: dates[0], last: dates[dates.length - 1] };
+}
+
+// ─── Cards ─────────────────────────────────────────────────────────────────
+function getCardById(id) { return data.cards.find(c => c.id === id) || null; }
+
+function getCardStats(cardId, month) {
+  const exps = data.expenses.filter(e => e.cardId === cardId && (!month || e.date.startsWith(month)));
+  const total = exps.reduce((s, e) => s + expenseBase(e), 0);
+  const byCategory = {};
+  exps.forEach(e => { byCategory[e.categoryId] = (byCategory[e.categoryId] || 0) + expenseBase(e); });
+  return { total, byCategory, count: exps.length };
+}
+
+// ─── Payroll ──────────────────────────────────────────────────────────────
+// Normalize any pay frequency to a monthly-equivalent amount (in base currency).
+function payrollMonthly(p) {
+  const amt = toBase(p.amount, p.currency || data.baseCurrency);
+  switch (p.frequency) {
+    case 'weekly':      return amt * 52 / 12;
+    case 'biweekly':    return amt * 26 / 12;
+    case 'semimonthly': return amt * 2;
+    case 'monthly':     return amt;
+    default:            return amt;
+  }
+}
+
+function totalMonthlyIncome() {
+  if (data.payrolls.length === 0) return data.income; // fall back to manual income
+  return data.payrolls.reduce((s, p) => s + payrollMonthly(p), 0);
+}
+
+// Generate pay dates for a payroll within [from, to] (inclusive), as YYYY-MM-DD strings.
+function payDatesInRange(p, from, to) {
+  const dates = [];
+  let d = new Date(p.startDate + 'T12:00:00');
+  const end = new Date(to + 'T12:00:00');
+  const start = new Date(from + 'T12:00:00');
+  // wind forward to at/after `from` without infinite loops
+  let guard = 0;
+  const step = (dt) => {
+    if (p.frequency === 'weekly') dt.setDate(dt.getDate() + 7);
+    else if (p.frequency === 'biweekly') dt.setDate(dt.getDate() + 14);
+    else if (p.frequency === 'monthly') dt.setMonth(dt.getMonth() + 1);
+    else if (p.frequency === 'semimonthly') {
+      // 1st and 15th-style: jump ~15 days alternating
+      if (dt.getDate() < 15) dt.setDate(15); else { dt.setMonth(dt.getMonth() + 1); dt.setDate(1); }
+    } else dt.setMonth(dt.getMonth() + 1);
+  };
+  while (d < start && guard++ < 600) step(d);
+  guard = 0;
+  while (d <= end && guard++ < 600) { dates.push(d.toISOString().slice(0,10)); step(d); }
+  return dates;
+}
+
+function nextPayday() {
+  const today = new Date().toISOString().slice(0,10);
+  const future = new Date(); future.setDate(future.getDate() + 90);
+  const horizon = future.toISOString().slice(0,10);
+  let best = null;
+  data.payrolls.forEach(p => {
+    payDatesInRange(p, today, horizon).forEach(dt => {
+      if (!best || dt < best.date) best = { date: dt, payroll: p };
+    });
+  });
+  return best;
+}
+
+function getMonthTotals(month) {
+  const exps = getMonthExpenses(month);
+  const total = exps.reduce((s, e) => s + expenseBase(e), 0);
+  const byCategory = {};
+  data.categories.forEach(c => { byCategory[c.id] = 0; });
+  exps.forEach(e => { byCategory[e.categoryId] = (byCategory[e.categoryId] || 0) + expenseBase(e); });
+  return { total, byCategory };
+}
+
+// ─── Period filter (dashboard) ──────────────────────────────────────────────
+function lastDayOfMonth(month) {
+  const [y, mo] = month.split('-').map(Number);
+  return `${month}-${String(new Date(y, mo, 0).getDate()).padStart(2, '0')}`;
+}
+
+// Resolve the active dashboard period into a concrete {start, end} (YYYY-MM-DD).
+function periodRange() {
+  const p = dashPeriod;
+  if (p.mode === 'range' && p.start && p.end) {
+    return p.start <= p.end ? { start: p.start, end: p.end } : { start: p.end, end: p.start };
+  }
+  return { start: p.month + '-01', end: lastDayOfMonth(p.month) };
+}
+
+function periodLabel() {
+  const p = dashPeriod;
+  if (p.mode === 'range' && p.start && p.end) {
+    const f = d => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+    const r = periodRange();
+    return `${f(r.start)} – ${f(r.end)}`;
+  }
+  return monthLabel(p.month);
+}
+
+function expensesInRange(start, end) {
+  return data.expenses.filter(e => e.date >= start && e.date <= end);
+}
+
+function rangeTotals(start, end) {
+  const exps = expensesInRange(start, end);
+  const total = exps.reduce((s, e) => s + expenseBase(e), 0);
+  const byCategory = {};
+  data.categories.forEach(c => { byCategory[c.id] = 0; });
+  exps.forEach(e => { byCategory[e.categoryId] = (byCategory[e.categoryId] || 0) + expenseBase(e); });
+  return { total, byCategory, count: exps.length };
+}
+
+function rangeDays(start, end) {
+  return Math.max(1, Math.round((new Date(end + 'T12:00:00') - new Date(start + 'T12:00:00')) / 86400000) + 1);
+}
+
+// Fraction of a month the period spans (used to prorate monthly budgets/income).
+function periodMonthsFactor(start, end) {
+  return rangeDays(start, end) / 30.4375;
+}
+
+// Money actually earned within [start, end]: count scheduled paydays × pay amount.
+function earnedInRange(start, end) {
+  if (data.payrolls.length) {
+    return data.payrolls.reduce((s, p) => s + payDatesInRange(p, start, end).length * toBase(p.amount, p.currency || data.baseCurrency), 0);
+  }
+  return totalMonthlyIncome() * periodMonthsFactor(start, end); // estimate from manual income
+}
+
+function getLast6Months() {
+  const months = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(1);
+    d.setMonth(d.getMonth() - i);
+    months.push(d.toISOString().slice(0, 7));
+  }
+  return months;
+}
+
+function monthLabel(m) {
+  const [y, mo] = m.split('-');
+  return new Date(y, mo - 1, 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+}
+
+// ─── Render ───────────────────────────────────────────────────────────────────
+function render() {
+  const app = document.getElementById('app');
+  app.innerHTML = buildLayout();
+  attachEvents();
+  renderCharts();
+}
+
+function buildLayout() {
+  return `
+  <div class="flex flex-col min-h-screen">
+    <!-- Header -->
+    <header class="card border-b border-slate-700 px-6 py-4 flex items-center justify-between sticky top-0 z-20">
+      <div class="flex items-center gap-3">
+        <span class="text-2xl">💸</span>
+        <div>
+          <h1 class="font-bold text-lg text-white">Money Flies</h1>
+          <p class="text-xs text-slate-400">Personal Finance Dashboard</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <input type="month" id="monthPicker" value="${activeMonth}"
+          class="input-field rounded-lg px-3 py-1.5 text-sm" />
+        <button onclick="exportData()" title="Download a backup of all your data" class="bg-slate-700 hover:bg-slate-600 text-white rounded-lg px-3 py-2 text-sm transition-colors">⬇️ Export</button>
+        <button onclick="document.getElementById('importFile').click()" title="Restore from a backup file" class="bg-slate-700 hover:bg-slate-600 text-white rounded-lg px-3 py-2 text-sm transition-colors">⬆️ Import</button>
+        <input type="file" id="importFile" accept="application/json,.json" class="hidden" onchange="importData(event)" />
+        <button onclick="openExpenseModal()" class="btn-primary text-white rounded-lg px-4 py-2 text-sm font-medium transition-all">
+          + Add Expense
+        </button>
+      </div>
+    </header>
+
+    <!-- Nav tabs -->
+    <nav class="glass border-b border-slate-700/50 px-6 flex gap-1 py-2 sticky top-[73px] z-10 overflow-x-auto">
+      ${['dashboard','expenses','trips','cards','income','budgets','analytics'].map(t => `
+        <button onclick="switchTab('${t}')" class="px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${activeTab === t ? 'tab-active text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700/50'}">
+          ${t === 'dashboard' ? '📊 Dashboard' : t === 'expenses' ? '📋 Expenses' : t === 'trips' ? '✈️ Trips' : t === 'cards' ? '💳 Cards' : t === 'income' ? '💵 Income' : t === 'budgets' ? '🎯 Budgets' : '📈 Analytics'}
+        </button>
+      `).join('')}
+    </nav>
+
+    <!-- Content -->
+    <main class="flex-1 p-6 max-w-7xl mx-auto w-full">
+      ${activeTab === 'dashboard' ? buildDashboard() : ''}
+      ${activeTab === 'expenses' ? buildExpenses() : ''}
+      ${activeTab === 'trips' ? buildTrips() : ''}
+      ${activeTab === 'cards' ? buildCards() : ''}
+      ${activeTab === 'income' ? buildIncome() : ''}
+      ${activeTab === 'budgets' ? buildBudgets() : ''}
+      ${activeTab === 'analytics' ? buildAnalytics() : ''}
+    </main>
+  </div>
+
+  ${showExpenseModal ? buildExpenseModal() : ''}
+  ${showCategoryModal ? buildCategoryModal() : ''}
+  ${showGroupModal ? buildGroupModal() : ''}
+  ${showCardModal ? buildCardModal() : ''}
+  ${showPayrollModal ? buildPayrollModal() : ''}
+  `;
+}
+
+// ─── Dashboard ────────────────────────────────────────────────────────────────
+function buildPeriodBar() {
+  const r = periodRange();
+  const presets = [
+    { id: 'thisMonth', label: 'This Month' },
+    { id: 'lastMonth', label: 'Last Month' },
+    { id: 'last3',     label: 'Last 3 Months' },
+    { id: 'ytd',       label: 'Year to Date' },
+  ];
+  return `
+  <div class="card rounded-xl p-4 flex flex-wrap items-center gap-2">
+    <span class="text-xs text-slate-400 uppercase tracking-wider mr-1">Period</span>
+    ${presets.map(p => `
+      <button onclick="setPreset('${p.id}')" class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${dashPeriod.preset===p.id ? 'tab-active text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}">${p.label}</button>
+    `).join('')}
+    <div class="flex items-center gap-2 ml-auto flex-wrap">
+      <span class="text-xs text-slate-500 ${dashPeriod.preset==='custom'?'text-indigo-400':''}">Custom:</span>
+      <input type="date" id="rangeStart" value="${r.start}" onchange="applyCustomRange()" class="input-field rounded-lg px-2 py-1.5 text-sm" />
+      <span class="text-slate-500 text-sm">→</span>
+      <input type="date" id="rangeEnd" value="${r.end}" onchange="applyCustomRange()" class="input-field rounded-lg px-2 py-1.5 text-sm" />
+    </div>
+  </div>`;
+}
+
+function buildDashboard() {
+  const { start, end } = periodRange();
+  const { total, byCategory } = rangeTotals(start, end);
+  const factor = periodMonthsFactor(start, end);
+  const totalBudget = data.categories.reduce((s, c) => s + c.budget, 0) * factor;
+  const remaining = totalBudget - total;
+  const earned = earnedInRange(start, end);
+  const net = earned - total;
+  const savingsRate = earned > 0 ? Math.max(0, (net / earned) * 100) : 0;
+  const days = rangeDays(start, end);
+  const dailyAvg = total / days;
+  const label = periodLabel();
+
+  return `
+  <div class="space-y-6">
+    ${buildPeriodBar()}
+
+    <!-- KPI Cards -->
+    <div class="grid grid-cols-2 lg:grid-cols-3 gap-4">
+      ${kpiCard('Total Spent', formatCurrency(total), label, '#f59e0b', '💳',
+        `<div class="mt-2">
+          <div class="flex justify-between text-xs text-slate-400 mb-1"><span>Budget (period)</span><span>${totalBudget>0?Math.round((total/totalBudget)*100):0}%</span></div>
+          <div class="progress-bar h-1.5"><div style="width:${totalBudget>0?Math.min(100,(total/totalBudget)*100):0}%;background:${total>totalBudget?'#ef4444':'#f59e0b'}" class="h-full rounded-full transition-all"></div></div>
+        </div>`
+      )}
+      ${kpiCard('Earned', formatCurrency(earned), data.payrolls.length ? 'from payroll' : 'estimated income', '#22c55e', '💵')}
+      ${kpiCard('Net (Earned − Spent)', (net < 0 ? '−' : '+') + formatCurrency(net), net < 0 ? '⚠️ Spent more than earned' : '👍 In the green', net < 0 ? '#ef4444' : '#22c55e', '⚖️')}
+      ${kpiCard('Savings Rate', savingsRate.toFixed(1) + '%', `${formatCurrency(net)} kept of ${formatCurrency(earned)}`, '#6366f1', '💰',
+        `<div class="mt-2"><div class="progress-bar h-1.5"><div style="width:${Math.min(100,savingsRate)}%;background:#6366f1" class="h-full rounded-full transition-all"></div></div></div>`
+      )}
+      ${kpiCard('Remaining Budget', formatCurrency(remaining), remaining < 0 ? '⚠️ Over budget' : 'Available to spend', remaining < 0 ? '#ef4444' : '#22c55e', '🎯')}
+      ${kpiCard('Daily Average', formatCurrency(dailyAvg), `over ${days} day${days===1?'':'s'}`, '#06b6d4', '📅')}
+    </div>
+
+    <!-- Earned vs Spent bar -->
+    <div class="card rounded-xl p-5">
+      <h3 class="font-semibold text-slate-200 mb-4">Earned vs Spent — ${label}</h3>
+      <div class="space-y-3">
+        ${(() => {
+          const max = Math.max(earned, total, 1);
+          const row = (lbl, val, color) => `
+            <div>
+              <div class="flex justify-between items-center mb-1">
+                <span class="text-sm text-slate-300">${lbl}</span>
+                <span class="text-sm font-semibold" style="color:${color}">${formatCurrency(val)}</span>
+              </div>
+              <div class="progress-bar h-3"><div style="width:${(val/max)*100}%;background:${color}" class="h-full rounded-full transition-all"></div></div>
+            </div>`;
+          return row('💵 Earned', earned, '#22c55e') + row('💳 Spent', total, '#f59e0b');
+        })()}
+      </div>
+    </div>
+
+    <!-- Charts row -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div class="card rounded-xl p-5 lg:col-span-2">
+        <h3 class="font-semibold text-slate-200 mb-4">6-Month Trend (Earned vs Spent)</h3>
+        <canvas id="trendChart" height="200"></canvas>
+      </div>
+      <div class="card rounded-xl p-5">
+        <h3 class="font-semibold text-slate-200 mb-4">Category Breakdown — ${label}</h3>
+        <canvas id="donutChart" height="200"></canvas>
+        <div id="donutLegend" class="mt-3 space-y-1 text-xs max-h-36 overflow-y-auto scrollbar-thin"></div>
+      </div>
+    </div>
+
+    <!-- Category spend bars -->
+    <div class="card rounded-xl p-5">
+      <h3 class="font-semibold text-slate-200 mb-4">Budget vs Actual — ${label}</h3>
+      <div class="space-y-3">
+        ${data.categories.map(cat => {
+          const spent = byCategory[cat.id] || 0;
+          const budget = cat.budget * factor;
+          const pct = budget > 0 ? Math.min(100, (spent / budget) * 100) : 0;
+          const over = spent > budget;
+          return `
+          <div>
+            <div class="flex justify-between items-center mb-1">
+              <span class="text-sm text-slate-300">${cat.icon} ${cat.name}</span>
+              <span class="text-sm ${over ? 'text-red-400' : 'text-slate-400'}">${formatCurrency(spent)} <span class="text-slate-500">/ ${formatCurrency(budget)}</span></span>
+            </div>
+            <div class="progress-bar h-2">
+              <div style="width:${pct}%;background:${over ? '#ef4444' : cat.color}" class="h-full rounded-full transition-all"></div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+function kpiCard(title, value, subtitle, color, icon, extra = '') {
+  return `
+  <div class="card rounded-xl p-5">
+    <div class="flex items-start justify-between">
+      <div>
+        <p class="text-xs text-slate-400 uppercase tracking-wider">${title}</p>
+        <p class="text-2xl font-bold mt-1" style="color:${color}">${value}</p>
+        <p class="text-xs text-slate-500 mt-0.5">${subtitle}</p>
+      </div>
+      <span class="text-2xl">${icon}</span>
+    </div>
+    ${extra}
+  </div>`;
+}
+
+// ─── Expenses ─────────────────────────────────────────────────────────────────
+function buildExpenses() {
+  const grp = activeGroupFilter ? getGroupById(activeGroupFilter) : null;
+  let exps = grp ? getGroupExpenses(activeGroupFilter) : getMonthExpenses(activeMonth);
+  exps = exps.slice().sort((a, b) => b.date.localeCompare(a.date));
+  const title = grp ? `${grp.icon} ${grp.name} — ${exps.length} expenses` : `${exps.length} Expenses — ${monthLabel(activeMonth)}`;
+  return `
+  <div class="card rounded-xl overflow-hidden">
+    <div class="px-5 py-4 border-b border-slate-700 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        ${grp ? `<button onclick="clearGroupFilter()" class="text-slate-400 hover:text-white text-sm">&larr; All</button>` : ''}
+        <h3 class="font-semibold text-slate-200">${title}</h3>
+      </div>
+      <button onclick="openExpenseModal()" class="btn-primary text-white rounded-lg px-3 py-1.5 text-sm font-medium">+ Add</button>
+    </div>
+    ${exps.length === 0 ? `
+      <div class="py-16 text-center text-slate-500">
+        <div class="text-4xl mb-3">🧾</div>
+        <p>No expenses yet for ${monthLabel(activeMonth)}</p>
+        <button onclick="openExpenseModal()" class="mt-4 btn-primary text-white rounded-lg px-4 py-2 text-sm">Add your first expense</button>
+      </div>` :
+    `<div class="divide-y divide-slate-700/50">
+      ${exps.map(e => {
+        const cat = getCategoryById(e.categoryId);
+        return `
+        <div class="flex items-center gap-4 px-5 py-3.5 hover:bg-slate-700/30 transition-colors">
+          <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0" style="background:${cat.color}22">${cat.icon}</div>
+          <div class="flex-1 min-w-0">
+            <p class="font-medium text-slate-200 truncate">${e.description}</p>
+            <p class="text-xs text-slate-500">${cat.name} · ${new Date(e.date + 'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</p>
+          </div>
+          ${(() => { const c = e.cardId ? getCardById(e.cardId) : null; return c ? `<span class="text-xs px-2 py-0.5 rounded-full flex-shrink-0 hidden sm:inline" style="background:${c.color}22;color:${c.color}">${c.icon} ${c.name}</span>` : ''; })()}
+          ${(() => { const g = e.groupId ? getGroupById(e.groupId) : null; return g ? `<span class="text-xs px-2 py-0.5 rounded-full flex-shrink-0 hidden sm:inline" style="background:${g.color}22;color:${g.color}">${g.icon} ${g.name}</span>` : ''; })()}
+          ${e.note ? `<p class="text-xs text-slate-500 hidden md:block max-w-[140px] truncate italic">"${e.note}"</p>` : ''}
+          <div class="text-right flex-shrink-0">
+            <p class="font-semibold text-red-400">${formatCurrency(expenseBase(e))}</p>
+            ${(e.currency && e.currency !== data.baseCurrency) ? `<p class="text-xs text-slate-500">${formatCurrency(e.origAmount != null ? e.origAmount : e.amount, e.currency)} ${e.currency}</p>` : ''}
+          </div>
+          <div class="flex gap-1 flex-shrink-0">
+            <button onclick="openExpenseModal('${e.id}')" class="p-1.5 rounded-lg hover:bg-slate-600 text-slate-400 hover:text-white transition-colors text-sm">✏️</button>
+            <button onclick="deleteExpense('${e.id}')" class="p-1.5 rounded-lg hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-colors text-sm">🗑️</button>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="px-5 py-3 border-t border-slate-700 flex justify-between items-center">
+      <span class="text-sm text-slate-400">Total</span>
+      <span class="font-bold text-red-400">${formatCurrency(exps.reduce((s,e)=>s+expenseBase(e),0))}</span>
+    </div>`}
+  </div>`;
+}
+
+// ─── Trips / Groups ───────────────────────────────────────────────────────────
+function buildTrips() {
+  const groups = data.groups.slice().sort((a, b) => {
+    const sa = getGroupStats(a.id).last || '', sb = getGroupStats(b.id).last || '';
+    return sb.localeCompare(sa);
+  });
+  return `
+  <div class="space-y-6">
+    <div class="card rounded-xl p-5 flex items-center gap-4 flex-wrap">
+      <span class="text-2xl">✈️</span>
+      <div class="flex-1 min-w-[200px]">
+        <p class="font-medium text-slate-200">Trips & Groups</p>
+        <p class="text-xs text-slate-400">Bundle expenses (a vacation, a project, an event). They still count toward your global KPIs.</p>
+      </div>
+      <button onclick="openGroupModal()" class="btn-primary text-white rounded-lg px-4 py-2 text-sm font-medium">+ New Trip</button>
+    </div>
+
+    ${groups.length === 0 ? `
+      <div class="card rounded-xl py-16 text-center text-slate-500">
+        <div class="text-4xl mb-3">🌍</div>
+        <p>No trips yet — create one for your Italy & Spain expenses</p>
+        <button onclick="openGroupModal()" class="mt-4 btn-primary text-white rounded-lg px-4 py-2 text-sm">Create your first trip</button>
+      </div>` :
+    `<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      ${groups.map(g => {
+        const st = getGroupStats(g.id);
+        const overBudget = g.budget > 0 && st.total > g.budget;
+        const pct = g.budget > 0 ? Math.min(100, (st.total / g.budget) * 100) : 0;
+        const cats = Object.entries(st.byCategory).map(([cid, amt]) => ({ cat: getCategoryById(cid), amt })).sort((a,b)=>b.amt-a.amt);
+        const range = st.first ? `${new Date(st.first+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})} – ${new Date(st.last+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'})}` : 'No expenses yet';
+        return `
+        <div class="card rounded-xl p-5 hover:border-slate-500 transition-colors">
+          <div class="flex items-start justify-between mb-3">
+            <div class="flex items-center gap-3">
+              <div class="w-11 h-11 rounded-xl flex items-center justify-center text-2xl" style="background:${g.color}22">${g.icon}</div>
+              <div>
+                <p class="font-semibold text-slate-100">${g.name}</p>
+                <p class="text-xs text-slate-500">${range} · ${st.count} expense${st.count===1?'':'s'}</p>
+              </div>
+            </div>
+            <div class="flex gap-1">
+              <button onclick="openGroupModal('${g.id}')" class="p-1.5 rounded-lg hover:bg-slate-600 text-slate-400 hover:text-white transition-colors text-sm">✏️</button>
+              <button onclick="deleteGroup('${g.id}')" class="p-1.5 rounded-lg hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-colors text-sm">🗑️</button>
+            </div>
+          </div>
+          <div class="flex items-end justify-between mb-2">
+            <span class="text-2xl font-bold" style="color:${overBudget?'#ef4444':g.color}">${formatCurrency(st.total)}</span>
+            ${g.budget > 0 ? `<span class="text-xs ${overBudget?'text-red-400':'text-slate-400'}">${overBudget?'⚠️ over by '+formatCurrency(st.total-g.budget):formatCurrency(g.budget-st.total)+' left'} <span class="text-slate-500">/ ${formatCurrency(g.budget)}</span></span>` : ''}
+          </div>
+          ${g.budget > 0 ? `<div class="progress-bar h-1.5 mb-3"><div style="width:${pct}%;background:${overBudget?'#ef4444':g.color}" class="h-full rounded-full transition-all"></div></div>` : ''}
+          ${cats.length ? `<div class="flex flex-wrap gap-1.5 mb-3">${cats.slice(0,5).map(c => `<span class="text-xs px-2 py-0.5 rounded-full" style="background:${c.cat.color}22;color:${c.cat.color}">${c.cat.icon} ${formatCurrency(c.amt)}</span>`).join('')}</div>` : '<p class="text-xs text-slate-500 mb-3">No expenses assigned yet</p>'}
+          <button onclick="viewGroup('${g.id}')" class="w-full bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg py-2 text-sm font-medium transition-colors">View expenses</button>
+        </div>`;
+      }).join('')}
+    </div>`}
+  </div>`;
+}
+
+// ─── Cards ────────────────────────────────────────────────────────────────────
+function buildCards() {
+  const cards = data.cards;
+  const monthExps = getMonthExpenses(activeMonth);
+  const unassigned = monthExps.filter(e => !e.cardId).reduce((s,e)=>s+expenseBase(e),0);
+  return `
+  <div class="space-y-6">
+    <div class="card rounded-xl p-5 flex items-center gap-4 flex-wrap">
+      <span class="text-2xl">💳</span>
+      <div class="flex-1 min-w-[200px]">
+        <p class="font-medium text-slate-200">Payment Methods</p>
+        <p class="text-xs text-slate-400">Track which card you used. Spending shown for ${monthLabel(activeMonth)}.</p>
+      </div>
+      <button onclick="openCardModal()" class="btn-primary text-white rounded-lg px-4 py-2 text-sm font-medium">+ Add Card</button>
+    </div>
+
+    ${cards.length === 0 ? `
+      <div class="card rounded-xl py-16 text-center text-slate-500">
+        <div class="text-4xl mb-3">💳</div>
+        <p>No cards yet — add your credit/debit cards to track spending per card</p>
+        <button onclick="openCardModal()" class="mt-4 btn-primary text-white rounded-lg px-4 py-2 text-sm">Add your first card</button>
+      </div>` :
+    `<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      ${cards.map(card => {
+        const st = getCardStats(card.id, activeMonth);
+        const allTime = getCardStats(card.id, null);
+        const util = card.limit > 0 ? Math.min(100, (st.total / card.limit) * 100) : 0;
+        const cats = Object.entries(st.byCategory).map(([cid, amt]) => ({ cat: getCategoryById(cid), amt })).sort((a,b)=>b.amt-a.amt);
+        return `
+        <div class="rounded-xl p-5 text-white relative overflow-hidden" style="background:linear-gradient(135deg, ${card.color}, ${card.color}cc)">
+          <div class="absolute top-0 right-0 w-32 h-32 rounded-full -mr-10 -mt-10" style="background:rgba(255,255,255,0.08)"></div>
+          <div class="flex items-start justify-between mb-6 relative">
+            <div>
+              <p class="text-2xl">${card.icon}</p>
+              <p class="font-semibold mt-1">${card.name}</p>
+            </div>
+            <div class="flex gap-1">
+              <button onclick="openCardModal('${card.id}')" class="p-1.5 rounded-lg hover:bg-white/20 transition-colors text-sm">✏️</button>
+              <button onclick="deleteCard('${card.id}')" class="p-1.5 rounded-lg hover:bg-white/20 transition-colors text-sm">🗑️</button>
+            </div>
+          </div>
+          <p class="text-sm opacity-80 relative">•••• •••• •••• ${card.last4 || '••••'}</p>
+          <div class="flex items-end justify-between mt-4 relative">
+            <div>
+              <p class="text-xs opacity-70">Spent in ${monthLabel(activeMonth)}</p>
+              <p class="text-2xl font-bold">${formatCurrency(st.total)}</p>
+            </div>
+            <div class="text-right text-xs opacity-80">
+              <p>${st.count} txns this month</p>
+              <p>${formatCurrency(allTime.total)} all-time</p>
+            </div>
+          </div>
+          ${card.limit > 0 ? `
+            <div class="mt-3 relative">
+              <div class="flex justify-between text-xs opacity-80 mb-1"><span>Credit used</span><span>${util.toFixed(0)}% of ${formatCurrency(card.limit)}</span></div>
+              <div class="h-1.5 rounded-full" style="background:rgba(255,255,255,0.25)"><div style="width:${util}%;background:white" class="h-full rounded-full"></div></div>
+            </div>` : ''}
+          ${cats.length ? `<div class="flex flex-wrap gap-1.5 mt-3 relative">${cats.slice(0,4).map(c => `<span class="text-xs px-2 py-0.5 rounded-full" style="background:rgba(255,255,255,0.2)">${c.cat.icon} ${formatCurrency(c.amt)}</span>`).join('')}</div>` : ''}
+        </div>`;
+      }).join('')}
+    </div>
+
+    <div class="card rounded-xl p-5">
+      <h3 class="font-semibold text-slate-200 mb-4">Spend by Card — ${monthLabel(activeMonth)}</h3>
+      <canvas id="cardChart" height="120"></canvas>
+    </div>
+
+    ${unassigned > 0 ? `<p class="text-xs text-slate-500 text-center">${formatCurrency(unassigned)} this month not assigned to any card</p>` : ''}`}
+  </div>`;
+}
+
+// ─── Income / Payroll ──────────────────────────────────────────────────────────
+function buildIncome() {
+  const payrolls = data.payrolls;
+  const monthly = totalMonthlyIncome();
+  const next = nextPayday();
+  const today = new Date().toISOString().slice(0,10);
+  const horizon = (() => { const d = new Date(); d.setDate(d.getDate()+60); return d.toISOString().slice(0,10); })();
+  // upcoming paydays across all payrolls, sorted
+  let upcoming = [];
+  payrolls.forEach(p => payDatesInRange(p, today, horizon).forEach(dt => upcoming.push({ date: dt, payroll: p })));
+  upcoming.sort((a,b) => a.date.localeCompare(b.date));
+  upcoming = upcoming.slice(0, 8);
+
+  return `
+  <div class="space-y-6">
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      ${kpiCard('Monthly Income', formatCurrency(monthly), payrolls.length ? 'from ' + payrolls.length + ' payroll source' + (payrolls.length>1?'s':'') : 'manual estimate', '#22c55e', '💵')}
+      ${kpiCard('Next Payday', next ? new Date(next.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—', next ? next.payroll.source + ' · ' + daysUntil(next.date) : 'No payroll set', '#6366f1', '📅')}
+      ${kpiCard('Annual Income', formatCurrency(monthly * 12), 'projected', '#f59e0b', '📈')}
+    </div>
+
+    <div class="card rounded-xl p-5 flex items-center gap-4 flex-wrap">
+      <span class="text-2xl">💵</span>
+      <div class="flex-1 min-w-[200px]">
+        <p class="font-medium text-slate-200">Payroll & Income Sources</p>
+        <p class="text-xs text-slate-400">Set up recurring pay so income & savings-rate stay accurate.</p>
+      </div>
+      <button onclick="openPayrollModal()" class="btn-primary text-white rounded-lg px-4 py-2 text-sm font-medium">+ Add Payroll</button>
+    </div>
+
+    ${payrolls.length === 0 ? `
+      <div class="card rounded-xl py-16 text-center text-slate-500">
+        <div class="text-4xl mb-3">🗓️</div>
+        <p>No payroll set up — add when & how much you get paid</p>
+        <button onclick="openPayrollModal()" class="mt-4 btn-primary text-white rounded-lg px-4 py-2 text-sm">Add payroll</button>
+      </div>` : `
+      <div class="card rounded-xl overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-700"><h3 class="font-semibold text-slate-200">Income Sources</h3></div>
+        <div class="divide-y divide-slate-700/50">
+          ${payrolls.map(p => `
+            <div class="flex items-center gap-4 px-5 py-3.5 hover:bg-slate-700/20 transition-colors">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0 bg-emerald-500/15">💰</div>
+              <div class="flex-1 min-w-0">
+                <p class="font-medium text-slate-200 truncate">${p.source}</p>
+                <p class="text-xs text-slate-500">${freqLabel(p.frequency)} · starts ${new Date(p.startDate+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'})}</p>
+              </div>
+              <div class="text-right">
+                <p class="font-semibold text-emerald-400">${formatCurrency(toBase(p.amount, p.currency||data.baseCurrency))}${p.currency && p.currency!==data.baseCurrency ? ` <span class="text-xs text-slate-500">(${formatCurrency(p.amount, p.currency)})</span>` : ''}</p>
+                <p class="text-xs text-slate-500">${formatCurrency(payrollMonthly(p))}/mo</p>
+              </div>
+              <div class="flex gap-1 flex-shrink-0">
+                <button onclick="openPayrollModal('${p.id}')" class="p-1.5 rounded-lg hover:bg-slate-600 text-slate-400 hover:text-white transition-colors text-sm">✏️</button>
+                <button onclick="deletePayroll('${p.id}')" class="p-1.5 rounded-lg hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-colors text-sm">🗑️</button>
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>
+
+      <div class="card rounded-xl overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-700"><h3 class="font-semibold text-slate-200">Upcoming Paydays (next 60 days)</h3></div>
+        <div class="divide-y divide-slate-700/50">
+          ${upcoming.length === 0 ? '<p class="px-5 py-6 text-center text-slate-500 text-sm">No paydays in the next 60 days</p>' :
+            upcoming.map(u => `
+            <div class="flex items-center gap-4 px-5 py-3">
+              <div class="text-center w-12 flex-shrink-0">
+                <p class="text-xs text-slate-500 uppercase">${new Date(u.date+'T12:00:00').toLocaleDateString('en-US',{month:'short'})}</p>
+                <p class="text-lg font-bold text-slate-200">${new Date(u.date+'T12:00:00').getDate()}</p>
+              </div>
+              <div class="flex-1">
+                <p class="text-sm text-slate-300">${u.payroll.source}</p>
+                <p class="text-xs text-slate-500">${daysUntil(u.date)}</p>
+              </div>
+              <p class="font-semibold text-emerald-400">+${formatCurrency(toBase(u.payroll.amount, u.payroll.currency||data.baseCurrency))}</p>
+            </div>`).join('')}
+        </div>
+      </div>`}
+  </div>`;
+}
+
+function daysUntil(dateStr) {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const d = new Date(dateStr + 'T00:00:00');
+  const diff = Math.round((d - today) / 86400000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Tomorrow';
+  if (diff < 0) return Math.abs(diff) + ' days ago';
+  return 'in ' + diff + ' days';
+}
+
+function freqLabel(f) {
+  return { weekly:'Weekly', biweekly:'Bi-weekly (every 2 weeks)', semimonthly:'Semi-monthly (twice a month)', monthly:'Monthly' }[f] || f;
+}
+
+// ─── Budgets ──────────────────────────────────────────────────────────────────
+function buildBudgets() {
+  const { byCategory } = getMonthTotals(activeMonth);
+  return `
+  <div class="space-y-6">
+    <!-- Base currency setting -->
+    <div class="card rounded-xl p-5 flex items-center gap-4 flex-wrap">
+      <span class="text-2xl">🌐</span>
+      <div class="flex-1 min-w-[180px]">
+        <p class="font-medium text-slate-200">Base Currency</p>
+        <p class="text-xs text-slate-400">All budgets & KPIs are shown in this. ${data.rates.fetchedAt ? 'Live rates updated ' + new Date(data.rates.fetchedAt).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : 'Using offline fallback rates'}</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <select id="baseCurrencySelect" onchange="updateBaseCurrency(this.value)" class="input-field rounded-lg px-3 py-2 font-semibold">
+          ${Object.entries(CURRENCIES).map(([c, info]) => `<option value="${c}" ${data.baseCurrency===c?'selected':''}>${info.symbol} ${c} — ${info.name}</option>`).join('')}
+        </select>
+        <button onclick="refreshRates()" class="bg-slate-700 hover:bg-slate-600 text-white rounded-lg px-3 py-2 text-sm transition-colors" title="Refresh exchange rates">🔄</button>
+      </div>
+    </div>
+
+    <!-- Income setting -->
+    <div class="card rounded-xl p-5 flex items-center gap-4 flex-wrap">
+      <span class="text-2xl">💵</span>
+      <div class="flex-1">
+        <p class="font-medium text-slate-200">Monthly Income</p>
+        <p class="text-xs text-slate-400">Used to calculate your savings rate (in ${data.baseCurrency})</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-slate-400">${(CURRENCIES[data.baseCurrency]||{}).symbol||''}</span>
+        <input id="incomeInput" type="number" value="${data.income}" min="0" step="100"
+          class="input-field rounded-lg px-3 py-2 w-36 text-right font-semibold"
+          onchange="updateIncome(this.value)" />
+      </div>
+    </div>
+
+    <!-- Category budgets -->
+    <div class="card rounded-xl overflow-hidden">
+      <div class="px-5 py-4 border-b border-slate-700 flex items-center justify-between">
+        <h3 class="font-semibold text-slate-200">Category Budgets</h3>
+        <button onclick="openCategoryModal()" class="btn-primary text-white rounded-lg px-3 py-1.5 text-sm font-medium">+ New Category</button>
+      </div>
+      <div class="divide-y divide-slate-700/50">
+        ${data.categories.map(cat => {
+          const spent = byCategory[cat.id] || 0;
+          const pct = cat.budget > 0 ? Math.min(100, (spent / cat.budget) * 100) : 0;
+          const remaining = cat.budget - spent;
+          const over = spent > cat.budget;
+          return `
+          <div class="flex items-center gap-4 px-5 py-4 hover:bg-slate-700/20 transition-colors flex-wrap gap-y-2">
+            <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0" style="background:${cat.color}22">${cat.icon}</div>
+            <div class="flex-1 min-w-[160px]">
+              <p class="font-medium text-slate-200">${cat.name}</p>
+              <div class="flex items-center gap-2 mt-1">
+                <div class="progress-bar h-1.5 flex-1"><div style="width:${pct}%;background:${over?'#ef4444':cat.color}" class="h-full rounded-full transition-all"></div></div>
+                <span class="text-xs ${over?'text-red-400':'text-slate-400'} flex-shrink-0">${pct.toFixed(0)}%</span>
+              </div>
+            </div>
+            <div class="text-right text-sm flex-shrink-0">
+              <p class="${over?'text-red-400':'text-slate-300'} font-medium">${formatCurrency(spent)} spent</p>
+              <p class="text-slate-500">${over ? '⚠️ ' + formatCurrency(Math.abs(remaining)) + ' over' : formatCurrency(remaining) + ' left'}</p>
+            </div>
+            <div class="flex items-center gap-1 flex-shrink-0">
+              <span class="text-slate-400">$</span>
+              <input type="number" value="${cat.budget}" min="0" step="50"
+                class="input-field rounded-lg px-2 py-1.5 w-28 text-right text-sm"
+                onchange="updateCategoryBudget('${cat.id}', this.value)" />
+              <button onclick="openCategoryModal('${cat.id}')" class="p-1.5 rounded-lg hover:bg-slate-600 text-slate-400 hover:text-white transition-colors text-sm">✏️</button>
+              <button onclick="deleteCategory('${cat.id}')" class="p-1.5 rounded-lg hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-colors text-sm">🗑️</button>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+      <div class="px-5 py-3 border-t border-slate-700 flex justify-between items-center text-sm">
+        <span class="text-slate-400">Total Budget</span>
+        <span class="font-bold text-slate-200">${formatCurrency(data.categories.reduce((s,c)=>s+c.budget,0))}</span>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ─── Analytics ────────────────────────────────────────────────────────────────
+function buildAnalytics() {
+  const months6 = getLast6Months();
+  const topCats = data.categories.map(c => ({
+    cat: c,
+    total: months6.reduce((s, m) => s + (getMonthTotals(m).byCategory[c.id] || 0), 0)
+  })).sort((a, b) => b.total - a.total).slice(0, 5);
+
+  return `
+  <div class="space-y-6">
+    <!-- Monthly comparison chart -->
+    <div class="card rounded-xl p-5">
+      <h3 class="font-semibold text-slate-200 mb-4">6-Month Spending Overview</h3>
+      <canvas id="barChart" height="120"></canvas>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <!-- Top categories (6 months) -->
+      <div class="card rounded-xl p-5">
+        <h3 class="font-semibold text-slate-200 mb-4">Top Categories (6 months)</h3>
+        <div class="space-y-3">
+          ${topCats.map((item, i) => {
+            const maxVal = topCats[0].total || 1;
+            return `
+            <div class="flex items-center gap-3">
+              <span class="text-slate-500 text-xs w-4">${i+1}</span>
+              <span class="text-lg">${item.cat.icon}</span>
+              <div class="flex-1">
+                <div class="flex justify-between text-sm mb-1">
+                  <span class="text-slate-300">${item.cat.name}</span>
+                  <span class="text-slate-400">${formatCurrency(item.total)}</span>
+                </div>
+                <div class="progress-bar h-2"><div style="width:${(item.total/maxVal)*100}%;background:${item.cat.color}" class="h-full rounded-full"></div></div>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+
+      <!-- Monthly stats table -->
+      <div class="card rounded-xl p-5">
+        <h3 class="font-semibold text-slate-200 mb-4">Monthly Summary</h3>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-slate-400 text-xs uppercase tracking-wider">
+                <th class="text-left pb-3">Month</th>
+                <th class="text-right pb-3">Spent</th>
+                <th class="text-right pb-3">Budget</th>
+                <th class="text-right pb-3">Status</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-700/50">
+              ${months6.reverse().map(m => {
+                const { total } = getMonthTotals(m);
+                const budget = data.categories.reduce((s,c)=>s+c.budget,0);
+                const over = total > budget;
+                return `
+                <tr class="hover:bg-slate-700/20">
+                  <td class="py-2.5 text-slate-300">${monthLabel(m)}</td>
+                  <td class="py-2.5 text-right ${over?'text-red-400':'text-slate-300'}">${formatCurrency(total)}</td>
+                  <td class="py-2.5 text-right text-slate-400">${formatCurrency(budget)}</td>
+                  <td class="py-2.5 text-right"><span class="px-2 py-0.5 rounded-full text-xs ${over?'bg-red-500/20 text-red-400':'bg-emerald-500/20 text-emerald-400'}">${over?'Over':'OK'}</span></td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ─── Modals ───────────────────────────────────────────────────────────────────
+function buildExpenseModal() {
+  const e = editingExpense;
+  const today = new Date().toISOString().slice(0, 10);
+  return `
+  <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
+    <div class="card rounded-2xl w-full max-w-md p-6 space-y-4" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between">
+        <h2 class="font-semibold text-lg">${e ? 'Edit Expense' : 'Add Expense'}</h2>
+        <button onclick="closeExpenseModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Description *</label>
+          <input id="exp_desc" type="text" placeholder="e.g. Grocery run" value="${e?.description||''}"
+            class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-slate-400 uppercase tracking-wider">Amount *</label>
+            <div class="flex gap-2 mt-1">
+              <input id="exp_amount" type="number" min="0.01" step="0.01" placeholder="0.00" value="${e ? (e.origAmount != null ? e.origAmount : e.amount) : ''}"
+                oninput="updateConvertPreview()"
+                class="input-field w-full rounded-lg px-3 py-2.5" />
+              <select id="exp_currency" onchange="updateConvertPreview()" class="input-field rounded-lg px-2 py-2.5 w-24">
+                ${Object.keys(CURRENCIES).map(c => `<option value="${c}" ${(e?.currency||data.baseCurrency)===c?'selected':''}>${c}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="text-xs text-slate-400 uppercase tracking-wider">Date *</label>
+            <input id="exp_date" type="date" value="${e?.date||today}"
+              class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
+          </div>
+        </div>
+        <p id="convertPreview" class="text-xs text-slate-400 -mt-1"></p>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Category *</label>
+          <select id="exp_cat" class="input-field w-full rounded-lg px-3 py-2.5 mt-1">
+            ${data.categories.map(c => `<option value="${c.id}" ${e?.categoryId===c.id?'selected':''}>${c.icon} ${c.name}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Paid with (card)</label>
+          <select id="exp_card" class="input-field w-full rounded-lg px-3 py-2.5 mt-1">
+            <option value="">— Not specified —</option>
+            ${data.cards.map(c => `<option value="${c.id}" ${e?.cardId===c.id?'selected':''}>${c.icon} ${c.name}${c.last4?' ••'+c.last4:''}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Trip / Group (optional)</label>
+          <select id="exp_group" class="input-field w-full rounded-lg px-3 py-2.5 mt-1">
+            <option value="">— None (regular expense) —</option>
+            ${data.groups.map(g => { const sel = e ? e.groupId===g.id : activeGroupFilter===g.id; return `<option value="${g.id}" ${sel?'selected':''}>${g.icon} ${g.name}</option>`; }).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Note (optional)</label>
+          <input id="exp_note" type="text" placeholder="Any additional details..." value="${e?.note||''}"
+            class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
+        </div>
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button onclick="closeExpenseModal()" class="flex-1 bg-slate-700 hover:bg-slate-600 text-white rounded-lg py-2.5 text-sm font-medium transition-colors">Cancel</button>
+        <button onclick="saveExpense()" class="flex-1 btn-primary text-white rounded-lg py-2.5 text-sm font-medium transition-all">${e ? 'Save Changes' : 'Add Expense'}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function buildCategoryModal() {
+  const c = editingCategory;
+  const emojis = ['🍔','🚗','🛍️','💊','🎮','⚡','🏠','💰','📦','✈️','🎓','💻','🏋️','🍷','🎁','📱','🐾','🌿'];
+  return `
+  <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
+    <div class="card rounded-2xl w-full max-w-sm p-6 space-y-4" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between">
+        <h2 class="font-semibold text-lg">${c ? 'Edit Category' : 'New Category'}</h2>
+        <button onclick="closeCategoryModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Name *</label>
+          <input id="cat_name" type="text" placeholder="e.g. Travel" value="${c?.name||''}"
+            class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Icon</label>
+          <div class="flex flex-wrap gap-2 mt-1">
+            ${emojis.map(em => `<button onclick="selectEmoji('${em}')" id="emoji_${em}" class="w-9 h-9 rounded-lg text-lg hover:bg-slate-600 transition-colors ${(c?.icon||'📦')===em?'bg-indigo-600':'bg-slate-700'}">${em}</button>`).join('')}
+          </div>
+          <input id="cat_icon" type="hidden" value="${c?.icon||'📦'}" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Color</label>
+          <div class="flex items-center gap-3 mt-1">
+            <input id="cat_color" type="color" value="${c?.color||'#6366f1'}" class="w-10 h-10 rounded-lg cursor-pointer bg-transparent border-0" />
+            <span class="text-sm text-slate-400">Pick a color for this category</span>
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Monthly Budget *</label>
+          <div class="relative mt-1">
+            <span class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">$</span>
+            <input id="cat_budget" type="number" min="0" step="50" placeholder="0" value="${c?.budget||''}"
+              class="input-field w-full rounded-lg pl-7 pr-3 py-2.5" />
+          </div>
+        </div>
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button onclick="closeCategoryModal()" class="flex-1 bg-slate-700 hover:bg-slate-600 text-white rounded-lg py-2.5 text-sm font-medium transition-colors">Cancel</button>
+        <button onclick="saveCategory()" class="flex-1 btn-primary text-white rounded-lg py-2.5 text-sm font-medium transition-all">${c ? 'Save' : 'Create'}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function buildGroupModal() {
+  const g = editingGroup;
+  const emojis = ['✈️','🇮🇹','🇪🇸','🏖️','🏔️','🗽','🎒','🚢','🏕️','🎉','💍','🏡','🎄','🎓','🏢','⚽'];
+  return `
+  <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
+    <div class="card rounded-2xl w-full max-w-sm p-6 space-y-4" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between">
+        <h2 class="font-semibold text-lg">${g ? 'Edit Trip' : 'New Trip / Group'}</h2>
+        <button onclick="closeGroupModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Name *</label>
+          <input id="grp_name" type="text" placeholder="e.g. Italy Trip" value="${g?.name||''}"
+            class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Icon</label>
+          <div class="flex flex-wrap gap-2 mt-1">
+            ${emojis.map(em => `<button onclick="selectGroupEmoji('${em}')" id="gemoji_${em}" class="w-9 h-9 rounded-lg text-lg hover:bg-slate-600 transition-colors ${(g?.icon||'✈️')===em?'bg-indigo-600':'bg-slate-700'}">${em}</button>`).join('')}
+          </div>
+          <input id="grp_icon" type="hidden" value="${g?.icon||'✈️'}" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Color</label>
+          <div class="flex items-center gap-3 mt-1">
+            <input id="grp_color" type="color" value="${g?.color||'#06b6d4'}" class="w-10 h-10 rounded-lg cursor-pointer bg-transparent border-0" />
+            <span class="text-sm text-slate-400">Accent color for this trip</span>
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Trip Budget (optional)</label>
+          <div class="relative mt-1">
+            <span class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">$</span>
+            <input id="grp_budget" type="number" min="0" step="50" placeholder="Leave blank for no limit" value="${g?.budget||''}"
+              class="input-field w-full rounded-lg pl-7 pr-3 py-2.5" />
+          </div>
+        </div>
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button onclick="closeGroupModal()" class="flex-1 bg-slate-700 hover:bg-slate-600 text-white rounded-lg py-2.5 text-sm font-medium transition-colors">Cancel</button>
+        <button onclick="saveGroup()" class="flex-1 btn-primary text-white rounded-lg py-2.5 text-sm font-medium transition-all">${g ? 'Save' : 'Create Trip'}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function buildCardModal() {
+  const c = editingCard;
+  const icons = ['💳','🏦','💰','🟦','🟥','🟨','🟩','⬛','🔶','🪙'];
+  return `
+  <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
+    <div class="card rounded-2xl w-full max-w-sm p-6 space-y-4" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between">
+        <h2 class="font-semibold text-lg">${c ? 'Edit Card' : 'New Card'}</h2>
+        <button onclick="closeCardModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Card Name *</label>
+          <input id="card_name" type="text" placeholder="e.g. Amex Cobalt" value="${c?.name||''}"
+            class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-slate-400 uppercase tracking-wider">Last 4 digits</label>
+            <input id="card_last4" type="text" maxlength="4" inputmode="numeric" placeholder="1234" value="${c?.last4||''}"
+              class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
+          </div>
+          <div>
+            <label class="text-xs text-slate-400 uppercase tracking-wider">Credit Limit</label>
+            <input id="card_limit" type="number" min="0" step="100" placeholder="optional" value="${c?.limit||''}"
+              class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Icon</label>
+          <div class="flex flex-wrap gap-2 mt-1">
+            ${icons.map(em => `<button onclick="selectCardEmoji('${em}')" id="cemoji_${em}" class="w-9 h-9 rounded-lg text-lg hover:bg-slate-600 transition-colors ${(c?.icon||'💳')===em?'bg-indigo-600':'bg-slate-700'}">${em}</button>`).join('')}
+          </div>
+          <input id="card_icon" type="hidden" value="${c?.icon||'💳'}" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Card Color</label>
+          <div class="flex items-center gap-3 mt-1">
+            <input id="card_color" type="color" value="${c?.color||'#6366f1'}" class="w-10 h-10 rounded-lg cursor-pointer bg-transparent border-0" />
+            <span class="text-sm text-slate-400">Shown on the card visual</span>
+          </div>
+        </div>
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button onclick="closeCardModal()" class="flex-1 bg-slate-700 hover:bg-slate-600 text-white rounded-lg py-2.5 text-sm font-medium transition-colors">Cancel</button>
+        <button onclick="saveCard()" class="flex-1 btn-primary text-white rounded-lg py-2.5 text-sm font-medium transition-all">${c ? 'Save' : 'Add Card'}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function buildPayrollModal() {
+  const p = editingPayroll;
+  return `
+  <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
+    <div class="card rounded-2xl w-full max-w-sm p-6 space-y-4" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between">
+        <h2 class="font-semibold text-lg">${p ? 'Edit Payroll' : 'New Payroll'}</h2>
+        <button onclick="closePayrollModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Source / Employer *</label>
+          <input id="pay_source" type="text" placeholder="e.g. Acme Corp" value="${p?.source||''}"
+            class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-slate-400 uppercase tracking-wider">Amount per pay *</label>
+            <div class="flex gap-1 mt-1">
+              <input id="pay_amount" type="number" min="0" step="50" placeholder="0.00" value="${p?.amount||''}"
+                class="input-field w-full rounded-lg px-3 py-2.5" />
+              <select id="pay_currency" class="input-field rounded-lg px-1 py-2.5 w-20">
+                ${Object.keys(CURRENCIES).map(cc => `<option value="${cc}" ${(p?.currency||data.baseCurrency)===cc?'selected':''}>${cc}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="text-xs text-slate-400 uppercase tracking-wider">Frequency *</label>
+            <select id="pay_freq" class="input-field w-full rounded-lg px-3 py-2.5 mt-1">
+              ${['weekly','biweekly','semimonthly','monthly'].map(f => `<option value="${f}" ${(p?.frequency||'biweekly')===f?'selected':''}>${freqLabel(f).split(' (')[0]}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">First / next pay date *</label>
+          <input id="pay_start" type="date" value="${p?.startDate||new Date().toISOString().slice(0,10)}"
+            class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
+        </div>
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button onclick="closePayrollModal()" class="flex-1 bg-slate-700 hover:bg-slate-600 text-white rounded-lg py-2.5 text-sm font-medium transition-colors">Cancel</button>
+        <button onclick="savePayroll()" class="flex-1 btn-primary text-white rounded-lg py-2.5 text-sm font-medium transition-all">${p ? 'Save' : 'Add Payroll'}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ─── Chart rendering ──────────────────────────────────────────────────────────
+function renderCharts() {
+  destroyCharts();
+  if (activeTab === 'dashboard') renderDashboardCharts();
+  if (activeTab === 'analytics') renderAnalyticsCharts();
+  if (activeTab === 'cards') renderCardChart();
+}
+
+function renderCardChart() {
+  const ctx = document.getElementById('cardChart');
+  if (!ctx || data.cards.length === 0) return;
+  const labels = data.cards.map(c => c.name);
+  const totals = data.cards.map(c => getCardStats(c.id, activeMonth).total);
+  chartInstances.card = new Chart(ctx, {
+    type: 'bar',
+    data: { labels, datasets: [{ label: 'Spent', data: totals, backgroundColor: data.cards.map(c => c.color), borderRadius: 6 }] },
+    options: { ...chartOpts(), plugins: { ...chartOpts().plugins, legend: { display: false } }, indexAxis: 'y' }
+  });
+}
+
+function destroyCharts() {
+  Object.values(chartInstances).forEach(c => c.destroy());
+  chartInstances = {};
+}
+
+function renderDashboardCharts() {
+  const months6 = getLast6Months();
+  const spentSeries = months6.map(m => getMonthTotals(m).total);
+  const earnedSeries = months6.map(m => earnedInRange(m + '-01', lastDayOfMonth(m)));
+
+  const trendCtx = document.getElementById('trendChart');
+  if (trendCtx) {
+    chartInstances.trend = new Chart(trendCtx, {
+      type: 'line',
+      data: {
+        labels: months6.map(monthLabel),
+        datasets: [
+          { label: 'Earned', data: earnedSeries, borderColor: '#22c55e', backgroundColor: 'rgba(34,197,94,0.08)', tension: 0.4, fill: true, pointBackgroundColor: '#22c55e', pointRadius: 4 },
+          { label: 'Spent', data: spentSeries, borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.08)', tension: 0.4, fill: true, pointBackgroundColor: '#f59e0b', pointRadius: 4 }
+        ]
+      },
+      options: chartOpts()
+    });
+  }
+
+  const { start, end } = periodRange();
+  const { byCategory } = rangeTotals(start, end);
+  const cats = data.categories.filter(c => (byCategory[c.id]||0) > 0);
+  const donutCtx = document.getElementById('donutChart');
+  if (donutCtx) {
+    chartInstances.donut = new Chart(donutCtx, {
+      type: 'doughnut',
+      data: {
+        labels: cats.map(c => c.name),
+        datasets: [{ data: cats.map(c => byCategory[c.id]||0), backgroundColor: cats.map(c => c.color), borderWidth: 2, borderColor: '#1e293b' }]
+      },
+      options: { ...donutOpts(), plugins: { legend: { display: false } } }
+    });
+    const legend = document.getElementById('donutLegend');
+    if (legend) {
+      legend.innerHTML = cats.map(c => `
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-1.5"><div class="w-2.5 h-2.5 rounded-full flex-shrink-0" style="background:${c.color}"></div><span class="text-slate-300">${c.icon} ${c.name}</span></div>
+          <span class="text-slate-400">${formatCurrency(byCategory[c.id]||0)}</span>
+        </div>`).join('');
+    }
+  }
+}
+
+function renderAnalyticsCharts() {
+  const months6 = getLast6Months().reverse();
+  const barCtx = document.getElementById('barChart');
+  if (barCtx) {
+    const budgetLine = data.categories.reduce((s,c)=>s+c.budget,0);
+    chartInstances.bar = new Chart(barCtx, {
+      type: 'bar',
+      data: {
+        labels: months6.map(monthLabel),
+        datasets: [
+          { label: 'Spent', data: months6.map(m => getMonthTotals(m).total), backgroundColor: months6.map(m => getMonthTotals(m).total > budgetLine ? 'rgba(239,68,68,0.7)' : 'rgba(99,102,241,0.7)'), borderRadius: 6 },
+          { label: 'Budget', data: months6.map(() => budgetLine), type: 'line', borderColor: '#f59e0b', borderDash: [5,5], tension: 0, pointRadius: 0, borderWidth: 2 }
+        ]
+      },
+      options: chartOpts()
+    });
+  }
+}
+
+function chartOpts() {
+  return {
+    responsive: true, maintainAspectRatio: true,
+    plugins: { legend: { labels: { color: '#94a3b8', font: { size: 12 } } }, tooltip: { backgroundColor: '#1e293b', borderColor: '#334155', borderWidth: 1, titleColor: '#f1f5f9', bodyColor: '#94a3b8', callbacks: { label: ctx => ' ' + formatCurrency(ctx.parsed.y||ctx.parsed) } } },
+    scales: { x: { ticks: { color: '#64748b' }, grid: { color: '#1e293b' } }, y: { ticks: { color: '#64748b', callback: v => ((CURRENCIES[data.baseCurrency]||{}).symbol||'') + v.toLocaleString() }, grid: { color: '#334155' } } }
+  };
+}
+
+function donutOpts() {
+  return {
+    responsive: true, maintainAspectRatio: true, cutout: '65%',
+    plugins: { tooltip: { backgroundColor: '#1e293b', borderColor: '#334155', borderWidth: 1, titleColor: '#f1f5f9', bodyColor: '#94a3b8', callbacks: { label: ctx => ' ' + formatCurrency(ctx.parsed) } } }
+  };
+}
+
+// ─── Event handlers ───────────────────────────────────────────────────────────
+function attachEvents() {
+  const mp = document.getElementById('monthPicker');
+  if (mp) mp.addEventListener('change', e => { activeMonth = e.target.value; render(); });
+}
+
+function switchTab(tab) { activeTab = tab; if (tab !== 'expenses') activeGroupFilter = null; render(); }
+
+function setPreset(id) {
+  const now = new Date();
+  const ymd = d => d.toISOString().slice(0, 10);
+  const ym = d => d.toISOString().slice(0, 7);
+  if (id === 'thisMonth') {
+    dashPeriod = { mode: 'month', preset: 'thisMonth', month: ym(now), start: null, end: null };
+  } else if (id === 'lastMonth') {
+    const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    dashPeriod = { mode: 'month', preset: 'lastMonth', month: ym(d), start: null, end: null };
+  } else if (id === 'last3') {
+    const startD = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+    dashPeriod = { mode: 'range', preset: 'last3', month: ym(now), start: ymd(startD), end: ymd(now) };
+  } else if (id === 'ytd') {
+    dashPeriod = { mode: 'range', preset: 'ytd', month: ym(now), start: now.getFullYear() + '-01-01', end: ymd(now) };
+  }
+  render();
+}
+
+function applyCustomRange() {
+  const start = document.getElementById('rangeStart').value;
+  const end = document.getElementById('rangeEnd').value;
+  if (!start || !end) return;
+  dashPeriod = { mode: 'range', preset: 'custom', month: dashPeriod.month, start, end };
+  render();
+}
+
+function viewGroup(id) { activeGroupFilter = id; activeTab = 'expenses'; render(); }
+function clearGroupFilter() { activeGroupFilter = null; render(); }
+
+function openExpenseModal(id) {
+  editingExpense = id ? data.expenses.find(e => e.id === id) : null;
+  showExpenseModal = true;
+  render();
+}
+
+function closeExpenseModal() { showExpenseModal = false; editingExpense = null; render(); }
+function closeCategoryModal() { showCategoryModal = false; editingCategory = null; render(); }
+function closeGroupModal() { showGroupModal = false; editingGroup = null; render(); }
+function closeCardModal() { showCardModal = false; editingCard = null; render(); }
+function closePayrollModal() { showPayrollModal = false; editingPayroll = null; render(); }
+function closeModal(event) { if (event.target === event.currentTarget) { showExpenseModal = showCategoryModal = showGroupModal = showCardModal = showPayrollModal = false; editingExpense = editingCategory = editingGroup = editingCard = editingPayroll = null; render(); } }
+
+function updateConvertPreview() {
+  const el = document.getElementById('convertPreview');
+  if (!el) return;
+  const amt = parseFloat(document.getElementById('exp_amount').value);
+  const cur = document.getElementById('exp_currency').value;
+  if (!amt || amt <= 0 || cur === data.baseCurrency) { el.textContent = ''; return; }
+  el.textContent = `≈ ${formatCurrency(toBase(amt, cur))} ${data.baseCurrency} (1 ${cur} = ${formatCurrency(toBase(1, cur))})`;
+}
+
+function saveExpense() {
+  const desc = document.getElementById('exp_desc').value.trim();
+  const origAmount = parseFloat(document.getElementById('exp_amount').value);
+  const currency = document.getElementById('exp_currency').value;
+  const date = document.getElementById('exp_date').value;
+  const categoryId = document.getElementById('exp_cat').value;
+  const note = document.getElementById('exp_note').value.trim();
+  const groupId = document.getElementById('exp_group').value || null;
+  const cardId = document.getElementById('exp_card').value || null;
+  if (!desc || !origAmount || origAmount <= 0 || !date) { alert('Please fill in all required fields.'); return; }
+  const amount = toBase(origAmount, currency); // cached base value for convenience
+  if (editingExpense) {
+    Object.assign(editingExpense, { description: desc, origAmount, currency, amount, date, categoryId, note, groupId, cardId });
+  } else {
+    data.expenses.push({ id: uuid(), description: desc, origAmount, currency, amount, date, categoryId, note, groupId, cardId, createdAt: new Date().toISOString() });
+  }
+  saveData(data);
+  closeExpenseModal();
+}
+
+function deleteExpense(id) {
+  if (!confirm('Delete this expense?')) return;
+  data.expenses = data.expenses.filter(e => e.id !== id);
+  saveData(data);
+  render();
+}
+
+function updateIncome(val) {
+  data.income = parseFloat(val) || 0;
+  saveData(data);
+}
+
+function updateBaseCurrency(cur) {
+  data.baseCurrency = cur;
+  saveData(data);
+  render();
+}
+
+function updateCategoryBudget(id, val) {
+  const cat = data.categories.find(c => c.id === id);
+  if (cat) { cat.budget = parseFloat(val) || 0; saveData(data); }
+}
+
+function openCategoryModal(id) {
+  editingCategory = id ? data.categories.find(c => c.id === id) : null;
+  showCategoryModal = true;
+  render();
+}
+
+function selectEmoji(em) {
+  document.getElementById('cat_icon').value = em;
+  document.querySelectorAll('[id^="emoji_"]').forEach(b => b.classList.remove('bg-indigo-600'));
+  const btn = document.getElementById('emoji_' + em);
+  if (btn) btn.classList.add('bg-indigo-600');
+}
+
+function saveCategory() {
+  const name = document.getElementById('cat_name').value.trim();
+  const icon = document.getElementById('cat_icon').value;
+  const color = document.getElementById('cat_color').value;
+  const budget = parseFloat(document.getElementById('cat_budget').value) || 0;
+  if (!name) { alert('Category name is required.'); return; }
+  if (editingCategory) {
+    Object.assign(editingCategory, { name, icon, color, budget });
+  } else {
+    data.categories.push({ id: uuid(), name, icon, color, budget });
+  }
+  saveData(data);
+  closeCategoryModal();
+}
+
+function deleteCategory(id) {
+  if (!confirm('Delete this category? Expenses using it will still be kept.')) return;
+  data.categories = data.categories.filter(c => c.id !== id);
+  saveData(data);
+  render();
+}
+
+function openGroupModal(id) {
+  editingGroup = id ? data.groups.find(g => g.id === id) : null;
+  showGroupModal = true;
+  render();
+}
+
+function selectGroupEmoji(em) {
+  document.getElementById('grp_icon').value = em;
+  document.querySelectorAll('[id^="gemoji_"]').forEach(b => b.classList.remove('bg-indigo-600'));
+  const btn = document.getElementById('gemoji_' + em);
+  if (btn) btn.classList.add('bg-indigo-600');
+}
+
+function saveGroup() {
+  const name = document.getElementById('grp_name').value.trim();
+  const icon = document.getElementById('grp_icon').value;
+  const color = document.getElementById('grp_color').value;
+  const budget = parseFloat(document.getElementById('grp_budget').value) || 0;
+  if (!name) { alert('Trip name is required.'); return; }
+  if (editingGroup) {
+    Object.assign(editingGroup, { name, icon, color, budget });
+  } else {
+    data.groups.push({ id: uuid(), name, icon, color, budget });
+  }
+  saveData(data);
+  closeGroupModal();
+}
+
+function deleteGroup(id) {
+  const st = getGroupStats(id);
+  if (!confirm(`Delete this trip? Its ${st.count} expense${st.count===1?'':'s'} will be kept as regular expenses (still counted in your KPIs).`)) return;
+  data.expenses.forEach(e => { if (e.groupId === id) e.groupId = null; });
+  data.groups = data.groups.filter(g => g.id !== id);
+  if (activeGroupFilter === id) activeGroupFilter = null;
+  saveData(data);
+  render();
+}
+
+// ─── Card handlers ────────────────────────────────────────────────────────────
+function openCardModal(id) { editingCard = id ? getCardById(id) : null; showCardModal = true; render(); }
+
+function selectCardEmoji(em) {
+  document.getElementById('card_icon').value = em;
+  document.querySelectorAll('[id^="cemoji_"]').forEach(b => b.classList.remove('bg-indigo-600'));
+  const btn = document.getElementById('cemoji_' + em);
+  if (btn) btn.classList.add('bg-indigo-600');
+}
+
+function saveCard() {
+  const name = document.getElementById('card_name').value.trim();
+  const last4 = document.getElementById('card_last4').value.replace(/\D/g,'').slice(0,4);
+  const limit = parseFloat(document.getElementById('card_limit').value) || 0;
+  const icon = document.getElementById('card_icon').value;
+  const color = document.getElementById('card_color').value;
+  if (!name) { alert('Card name is required.'); return; }
+  if (editingCard) {
+    Object.assign(editingCard, { name, last4, limit, icon, color });
+  } else {
+    data.cards.push({ id: uuid(), name, last4, limit, icon, color });
+  }
+  saveData(data);
+  closeCardModal();
+}
+
+function deleteCard(id) {
+  const used = data.expenses.filter(e => e.cardId === id).length;
+  if (!confirm(`Delete this card? Its ${used} expense${used===1?'':'s'} will be kept (just no longer assigned to a card).`)) return;
+  data.expenses.forEach(e => { if (e.cardId === id) e.cardId = null; });
+  data.cards = data.cards.filter(c => c.id !== id);
+  saveData(data);
+  render();
+}
+
+// ─── Payroll handlers ─────────────────────────────────────────────────────────
+function openPayrollModal(id) { editingPayroll = id ? data.payrolls.find(p => p.id === id) : null; showPayrollModal = true; render(); }
+
+function savePayroll() {
+  const source = document.getElementById('pay_source').value.trim();
+  const amount = parseFloat(document.getElementById('pay_amount').value);
+  const currency = document.getElementById('pay_currency').value;
+  const frequency = document.getElementById('pay_freq').value;
+  const startDate = document.getElementById('pay_start').value;
+  if (!source || !amount || amount <= 0 || !startDate) { alert('Please fill in all required fields.'); return; }
+  if (editingPayroll) {
+    Object.assign(editingPayroll, { source, amount, currency, frequency, startDate });
+  } else {
+    data.payrolls.push({ id: uuid(), source, amount, currency, frequency, startDate });
+  }
+  saveData(data);
+  closePayrollModal();
+}
+
+function deletePayroll(id) {
+  if (!confirm('Delete this payroll source?')) return;
+  data.payrolls = data.payrolls.filter(p => p.id !== id);
+  saveData(data);
+  render();
+}
+
+// ─── Backup: export / import ────────────────────────────────────────────────
+function exportData() {
+  const payload = { app: 'Money Flies', version: 1, exportedAt: new Date().toISOString(), data };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'money-flies-backup-' + new Date().toISOString().slice(0,10) + '.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function importData(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(reader.result);
+      const incoming = parsed.data && parsed.data.expenses ? parsed.data : parsed; // accept wrapped or raw
+      if (!incoming || !Array.isArray(incoming.expenses)) throw new Error('Not a valid Money Flies backup.');
+      if (!confirm('This will REPLACE all current data with the contents of the backup file. Continue?')) { event.target.value = ''; return; }
+      data = incoming;
+      // ensure required fields exist (reuse load-time defaults)
+      if (!data.groups) data.groups = [];
+      if (!data.cards) data.cards = [];
+      if (!data.payrolls) data.payrolls = [];
+      if (!data.baseCurrency) data.baseCurrency = 'CAD';
+      if (!data.rates) data.rates = { base: 'USD', table: { ...FALLBACK_RATES }, fetchedAt: null };
+      data.expenses.forEach(e => { if (e.currency == null) e.currency = data.baseCurrency; if (e.origAmount == null) e.origAmount = e.amount; });
+      saveData(data);
+      render();
+      alert('Backup restored successfully ✅');
+    } catch (err) {
+      alert('Could not import this file: ' + err.message);
+    }
+    event.target.value = ''; // allow re-importing the same file
+  };
+  reader.readAsText(file);
+}
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+render();
+refreshRates(); // fetch live FX rates in the background, then re-render
+
+// Register service worker so the app works offline after first load (no-op on file://).
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
