@@ -362,7 +362,7 @@ function buildLayout() {
     </header>
 
     <!-- Nav tabs -->
-    <nav class="glass border-b border-slate-700/50 px-6 flex gap-1 py-2 sticky top-[73px] z-10">
+    <nav class="glass border-b border-slate-700/50 px-6 flex gap-1 py-2 sticky top-[73px] ${showMenu ? 'z-40' : 'z-10'}">
       ${['dashboard','expenses'].map(t => `
         <button onclick="switchTab('${t}')" class="px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${activeTab === t ? 'tab-active text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700/50'}">
           ${tabLabel(t)}
@@ -385,7 +385,7 @@ function buildLayout() {
         </div>`;
       })()}
     </nav>
-    ${showMenu ? `<div class="fixed inset-0 z-20" onclick="closeMenu()"></div>` : ''}
+    ${showMenu ? `<div class="fixed inset-0 z-30" onclick="closeMenu()"></div>` : ''}
 
     <!-- Content -->
     <main class="flex-1 p-6 max-w-7xl mx-auto w-full">
