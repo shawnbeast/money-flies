@@ -522,6 +522,37 @@ function buildDashboard() {
         }).join('')}
       </div>
     </div>
+
+    <!-- Spending by card -->
+    ${(() => {
+      if (data.cards.length === 0) return '';
+      const periodExps = expensesInRange(start, end);
+      const cardSpend = data.cards.map(c => ({ card: c, amt: periodExps.filter(e => e.cardId === c.id).reduce((s, e) => s + expenseBase(e), 0) }));
+      const unassigned = periodExps.filter(e => !e.cardId).reduce((s, e) => s + expenseBase(e), 0);
+      const max = Math.max(...cardSpend.map(c => c.amt), unassigned, 1);
+      const rows = cardSpend.sort((a, b) => b.amt - a.amt);
+      const bar = (icon, name, color, amt) => {
+        const share = total > 0 ? (amt / total) * 100 : 0;
+        return `
+          <div>
+            <div class="flex justify-between items-center mb-1">
+              <span class="text-sm text-slate-300 flex items-center gap-2">${icon} ${name}
+                <span class="text-xs px-1.5 py-0.5 rounded-full" style="background:${color}22;color:${color}">${share.toFixed(1)}% of spend</span>
+              </span>
+              <span class="text-sm text-slate-400">${formatCurrency(amt)}</span>
+            </div>
+            <div class="progress-bar h-2"><div style="width:${(amt/max)*100}%;background:${color}" class="h-full rounded-full transition-all"></div></div>
+          </div>`;
+      };
+      return `
+      <div class="card rounded-xl p-5">
+        <h3 class="font-semibold text-slate-200 mb-4">Spending by Card — ${label}</h3>
+        <div class="space-y-3">
+          ${rows.map(c => bar(c.card.icon, c.card.name + (c.card.last4 ? ' ••' + c.card.last4 : ''), c.card.color, c.amt)).join('')}
+          ${unassigned > 0 ? bar('❔', 'Unassigned', '#94a3b8', unassigned) : ''}
+        </div>
+      </div>`;
+    })()}
   </div>`;
 }
 
