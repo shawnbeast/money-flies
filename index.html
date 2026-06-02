@@ -110,6 +110,7 @@ let showCardModal = false;
 let editingCard = null;
 let showPayrollModal = false;
 let editingPayroll = null;
+let showCustomizeModal = false; // dashboard layout editor
 let showMenu = false; // "More" nav dropdown
 // Dashboard time-period filter (independent of the header month picker).
 let dashPeriod = { mode: 'month', preset: 'thisMonth', month: new Date().toISOString().slice(0, 7), start: null, end: null };
@@ -404,6 +405,7 @@ function buildLayout() {
   ${showGroupModal ? buildGroupModal() : ''}
   ${showCardModal ? buildCardModal() : ''}
   ${showPayrollModal ? buildPayrollModal() : ''}
+  ${showCustomizeModal ? buildCustomizeModal() : ''}
   `;
 }
 
@@ -431,6 +433,24 @@ function buildPeriodBar() {
   </div>`;
 }
 
+// Available dashboard widgets (order here = default order).
+const DASHBOARD_WIDGETS = [
+  { id: 'kpis',          label: 'KPI cards (spent, earned, net…)' },
+  { id: 'earnedVsSpent', label: 'Earned vs Spent bars' },
+  { id: 'trend',         label: '6-Month Trend chart' },
+  { id: 'donut',         label: 'Category Breakdown (donut)' },
+  { id: 'budgetBars',    label: 'Budget vs Actual + category %' },
+  { id: 'cardBars',      label: 'Spending by Card' },
+];
+
+function getDashboardLayout() {
+  const known = new Set(DASHBOARD_WIDGETS.map(w => w.id));
+  let layout = (Array.isArray(data.dashboardLayout) ? data.dashboardLayout : []).filter(w => w && known.has(w.id));
+  DASHBOARD_WIDGETS.forEach(w => { if (!layout.find(l => l.id === w.id)) layout.push({ id: w.id, visible: true }); });
+  return layout;
+}
+function widgetLabel(id) { return (DASHBOARD_WIDGETS.find(w => w.id === id) || {}).label || id; }
+
 function buildDashboard() {
   const { start, end } = periodRange();
   const { total, byCategory } = rangeTotals(start, end);
@@ -444,87 +464,84 @@ function buildDashboard() {
   const dailyAvg = total / days;
   const label = periodLabel();
 
-  return `
-  <div class="space-y-6">
-    ${buildPeriodBar()}
+  // Each widget is a function returning its HTML block (or '' to render nothing).
+  const widgets = {
+    kpis: () => `
+      <div class="grid grid-cols-2 lg:grid-cols-3 gap-4">
+        ${kpiCard('Total Spent', formatCurrency(total), label, '#f59e0b', '💳',
+          `<div class="mt-2">
+            <div class="flex justify-between text-xs text-slate-400 mb-1"><span>Budget (period)</span><span>${totalBudget>0?Math.round((total/totalBudget)*100):0}%</span></div>
+            <div class="progress-bar h-1.5"><div style="width:${totalBudget>0?Math.min(100,(total/totalBudget)*100):0}%;background:${total>totalBudget?'#ef4444':'#f59e0b'}" class="h-full rounded-full transition-all"></div></div>
+          </div>`
+        )}
+        ${kpiCard('Earned', formatCurrency(earned), data.payrolls.length ? 'from payroll' : 'estimated income', '#22c55e', '💵')}
+        ${kpiCard('Net (Earned − Spent)', (net < 0 ? '−' : '+') + formatCurrency(net), net < 0 ? '⚠️ Spent more than earned' : '👍 In the green', net < 0 ? '#ef4444' : '#22c55e', '⚖️')}
+        ${kpiCard('Savings Rate', savingsRate.toFixed(1) + '%', `${formatCurrency(net)} kept of ${formatCurrency(earned)}`, '#6366f1', '💰',
+          `<div class="mt-2"><div class="progress-bar h-1.5"><div style="width:${Math.min(100,savingsRate)}%;background:#6366f1" class="h-full rounded-full transition-all"></div></div></div>`
+        )}
+        ${kpiCard('Remaining Budget', formatCurrency(remaining), remaining < 0 ? '⚠️ Over budget' : 'Available to spend', remaining < 0 ? '#ef4444' : '#22c55e', '🎯')}
+        ${kpiCard('Daily Average', formatCurrency(dailyAvg), `over ${days} day${days===1?'':'s'}`, '#06b6d4', '📅')}
+      </div>`,
 
-    <!-- KPI Cards -->
-    <div class="grid grid-cols-2 lg:grid-cols-3 gap-4">
-      ${kpiCard('Total Spent', formatCurrency(total), label, '#f59e0b', '💳',
-        `<div class="mt-2">
-          <div class="flex justify-between text-xs text-slate-400 mb-1"><span>Budget (period)</span><span>${totalBudget>0?Math.round((total/totalBudget)*100):0}%</span></div>
-          <div class="progress-bar h-1.5"><div style="width:${totalBudget>0?Math.min(100,(total/totalBudget)*100):0}%;background:${total>totalBudget?'#ef4444':'#f59e0b'}" class="h-full rounded-full transition-all"></div></div>
-        </div>`
-      )}
-      ${kpiCard('Earned', formatCurrency(earned), data.payrolls.length ? 'from payroll' : 'estimated income', '#22c55e', '💵')}
-      ${kpiCard('Net (Earned − Spent)', (net < 0 ? '−' : '+') + formatCurrency(net), net < 0 ? '⚠️ Spent more than earned' : '👍 In the green', net < 0 ? '#ef4444' : '#22c55e', '⚖️')}
-      ${kpiCard('Savings Rate', savingsRate.toFixed(1) + '%', `${formatCurrency(net)} kept of ${formatCurrency(earned)}`, '#6366f1', '💰',
-        `<div class="mt-2"><div class="progress-bar h-1.5"><div style="width:${Math.min(100,savingsRate)}%;background:#6366f1" class="h-full rounded-full transition-all"></div></div></div>`
-      )}
-      ${kpiCard('Remaining Budget', formatCurrency(remaining), remaining < 0 ? '⚠️ Over budget' : 'Available to spend', remaining < 0 ? '#ef4444' : '#22c55e', '🎯')}
-      ${kpiCard('Daily Average', formatCurrency(dailyAvg), `over ${days} day${days===1?'':'s'}`, '#06b6d4', '📅')}
-    </div>
+    earnedVsSpent: () => `
+      <div class="card rounded-xl p-5">
+        <h3 class="font-semibold text-slate-200 mb-4">Earned vs Spent — ${label}</h3>
+        <div class="space-y-3">
+          ${(() => {
+            const max = Math.max(earned, total, 1);
+            const row = (lbl, val, color) => `
+              <div>
+                <div class="flex justify-between items-center mb-1">
+                  <span class="text-sm text-slate-300">${lbl}</span>
+                  <span class="text-sm font-semibold" style="color:${color}">${formatCurrency(val)}</span>
+                </div>
+                <div class="progress-bar h-3"><div style="width:${(val/max)*100}%;background:${color}" class="h-full rounded-full transition-all"></div></div>
+              </div>`;
+            return row('💵 Earned', earned, '#22c55e') + row('💳 Spent', total, '#f59e0b');
+          })()}
+        </div>
+      </div>`,
 
-    <!-- Earned vs Spent bar -->
-    <div class="card rounded-xl p-5">
-      <h3 class="font-semibold text-slate-200 mb-4">Earned vs Spent — ${label}</h3>
-      <div class="space-y-3">
-        ${(() => {
-          const max = Math.max(earned, total, 1);
-          const row = (lbl, val, color) => `
-            <div>
-              <div class="flex justify-between items-center mb-1">
-                <span class="text-sm text-slate-300">${lbl}</span>
-                <span class="text-sm font-semibold" style="color:${color}">${formatCurrency(val)}</span>
-              </div>
-              <div class="progress-bar h-3"><div style="width:${(val/max)*100}%;background:${color}" class="h-full rounded-full transition-all"></div></div>
-            </div>`;
-          return row('💵 Earned', earned, '#22c55e') + row('💳 Spent', total, '#f59e0b');
-        })()}
-      </div>
-    </div>
-
-    <!-- Charts row -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <div class="card rounded-xl p-5 lg:col-span-2">
+    trend: () => `
+      <div class="card rounded-xl p-5">
         <h3 class="font-semibold text-slate-200 mb-4">6-Month Trend (Earned vs Spent)</h3>
         <canvas id="trendChart" height="200"></canvas>
-      </div>
+      </div>`,
+
+    donut: () => `
       <div class="card rounded-xl p-5">
         <h3 class="font-semibold text-slate-200 mb-4">Category Breakdown — ${label}</h3>
         <canvas id="donutChart" height="200"></canvas>
-        <div id="donutLegend" class="mt-3 space-y-1 text-xs max-h-36 overflow-y-auto scrollbar-thin"></div>
-      </div>
-    </div>
+        <div id="donutLegend" class="mt-3 space-y-1 text-xs max-h-48 overflow-y-auto scrollbar-thin"></div>
+      </div>`,
 
-    <!-- Category spend bars -->
-    <div class="card rounded-xl p-5">
-      <h3 class="font-semibold text-slate-200 mb-4">Budget vs Actual — ${label}</h3>
-      <div class="space-y-3">
-        ${data.categories.map(cat => {
-          const spent = byCategory[cat.id] || 0;
-          const budget = cat.budget * factor;
-          const pct = budget > 0 ? Math.min(100, (spent / budget) * 100) : 0;
-          const over = spent > budget;
-          const share = total > 0 ? (spent / total) * 100 : 0;
-          return `
-          <div>
-            <div class="flex justify-between items-center mb-1">
-              <span class="text-sm text-slate-300 flex items-center gap-2">${cat.icon} ${cat.name}
-                <span class="text-xs px-1.5 py-0.5 rounded-full" style="background:${cat.color}22;color:${cat.color}">${share.toFixed(1)}% of spend</span>
-              </span>
-              <span class="text-sm ${over ? 'text-red-400' : 'text-slate-400'}">${formatCurrency(spent)} <span class="text-slate-500">/ ${formatCurrency(budget)}</span></span>
-            </div>
-            <div class="progress-bar h-2">
-              <div style="width:${pct}%;background:${over ? '#ef4444' : cat.color}" class="h-full rounded-full transition-all"></div>
-            </div>
-          </div>`;
-        }).join('')}
-      </div>
-    </div>
+    budgetBars: () => `
+      <div class="card rounded-xl p-5">
+        <h3 class="font-semibold text-slate-200 mb-4">Budget vs Actual — ${label}</h3>
+        <div class="space-y-3">
+          ${data.categories.map(cat => {
+            const spent = byCategory[cat.id] || 0;
+            const budget = cat.budget * factor;
+            const pct = budget > 0 ? Math.min(100, (spent / budget) * 100) : 0;
+            const over = spent > budget;
+            const share = total > 0 ? (spent / total) * 100 : 0;
+            return `
+            <div>
+              <div class="flex justify-between items-center mb-1">
+                <span class="text-sm text-slate-300 flex items-center gap-2">${cat.icon} ${cat.name}
+                  <span class="text-xs px-1.5 py-0.5 rounded-full" style="background:${cat.color}22;color:${cat.color}">${share.toFixed(1)}% of spend</span>
+                </span>
+                <span class="text-sm ${over ? 'text-red-400' : 'text-slate-400'}">${formatCurrency(spent)} <span class="text-slate-500">/ ${formatCurrency(budget)}</span></span>
+              </div>
+              <div class="progress-bar h-2">
+                <div style="width:${pct}%;background:${over ? '#ef4444' : cat.color}" class="h-full rounded-full transition-all"></div>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`,
 
-    <!-- Spending by card -->
-    ${(() => {
+    cardBars: () => {
       if (data.cards.length === 0) return '';
       const periodExps = expensesInRange(start, end);
       const cardSpend = data.cards.map(c => ({ card: c, amt: periodExps.filter(e => e.cardId === c.id).reduce((s, e) => s + expenseBase(e), 0) }));
@@ -552,7 +569,18 @@ function buildDashboard() {
           ${unassigned > 0 ? bar('❔', 'Unassigned', '#94a3b8', unassigned) : ''}
         </div>
       </div>`;
-    })()}
+    },
+  };
+
+  const body = getDashboardLayout().filter(w => w.visible).map(w => widgets[w.id] ? widgets[w.id]() : '').join('');
+
+  return `
+  <div class="space-y-6">
+    ${buildPeriodBar()}
+    <div class="flex justify-end -mt-2 -mb-2">
+      <button onclick="openCustomizeModal()" class="text-xs text-slate-400 hover:text-white flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-slate-700/50 transition-colors">⚙️ Customize dashboard</button>
+    </div>
+    ${body || '<p class="text-center text-slate-500 py-10">All sections are hidden. Tap ⚙️ Customize dashboard to turn some on.</p>'}
   </div>`;
 }
 
@@ -1260,6 +1288,37 @@ function buildPayrollModal() {
   </div>`;
 }
 
+function buildCustomizeModal() {
+  const layout = getDashboardLayout();
+  return `
+  <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
+    <div class="card rounded-2xl w-full max-w-md p-6 space-y-4" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between">
+        <h2 class="font-semibold text-lg">⚙️ Customize Dashboard</h2>
+        <button onclick="closeCustomizeModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+      </div>
+      <p class="text-xs text-slate-400 -mt-2">Show/hide sections and reorder them. Changes save automatically.</p>
+      <div class="space-y-2">
+        ${layout.map((w, i) => `
+          <div class="flex items-center gap-3 bg-slate-800/60 rounded-lg px-3 py-2.5">
+            <div class="flex flex-col gap-0.5">
+              <button onclick="moveWidget('${w.id}',-1)" ${i===0?'disabled':''} class="text-slate-400 hover:text-white disabled:opacity-20 disabled:cursor-not-allowed text-xs leading-none">▲</button>
+              <button onclick="moveWidget('${w.id}',1)" ${i===layout.length-1?'disabled':''} class="text-slate-400 hover:text-white disabled:opacity-20 disabled:cursor-not-allowed text-xs leading-none">▼</button>
+            </div>
+            <span class="flex-1 text-sm ${w.visible?'text-slate-200':'text-slate-500 line-through'}">${widgetLabel(w.id)}</span>
+            <button onclick="toggleWidget('${w.id}')" class="px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${w.visible?'bg-indigo-600 text-white':'bg-slate-700 text-slate-400 hover:bg-slate-600'}">
+              ${w.visible ? '👁 Shown' : 'Hidden'}
+            </button>
+          </div>`).join('')}
+      </div>
+      <div class="flex gap-3 pt-1">
+        <button onclick="resetDashboardLayout()" class="flex-1 bg-slate-700 hover:bg-slate-600 text-white rounded-lg py-2.5 text-sm font-medium transition-colors">Reset to default</button>
+        <button onclick="closeCustomizeModal()" class="flex-1 btn-primary text-white rounded-lg py-2.5 text-sm font-medium transition-all">Done</button>
+      </div>
+    </div>
+  </div>`;
+}
+
 // ─── Chart rendering ──────────────────────────────────────────────────────────
 function renderCharts() {
   destroyCharts();
@@ -1422,7 +1481,26 @@ function closeCategoryModal() { showCategoryModal = false; editingCategory = nul
 function closeGroupModal() { showGroupModal = false; editingGroup = null; render(); }
 function closeCardModal() { showCardModal = false; editingCard = null; render(); }
 function closePayrollModal() { showPayrollModal = false; editingPayroll = null; render(); }
-function closeModal(event) { if (event.target === event.currentTarget) { showExpenseModal = showCategoryModal = showGroupModal = showCardModal = showPayrollModal = false; editingExpense = editingCategory = editingGroup = editingCard = editingPayroll = null; render(); } }
+function openCustomizeModal() { showCustomizeModal = true; showMenu = false; render(); }
+function closeCustomizeModal() { showCustomizeModal = false; render(); }
+function saveDashboardLayout(layout) { data.dashboardLayout = layout; saveData(data); }
+function toggleWidget(id) {
+  const layout = getDashboardLayout();
+  const w = layout.find(l => l.id === id); if (w) w.visible = !w.visible;
+  saveDashboardLayout(layout); render();
+}
+function moveWidget(id, dir) {
+  const layout = getDashboardLayout();
+  const i = layout.findIndex(l => l.id === id), j = i + dir;
+  if (i < 0 || j < 0 || j >= layout.length) return;
+  [layout[i], layout[j]] = [layout[j], layout[i]];
+  saveDashboardLayout(layout); render();
+}
+function resetDashboardLayout() {
+  saveDashboardLayout(DASHBOARD_WIDGETS.map(w => ({ id: w.id, visible: true })));
+  render();
+}
+function closeModal(event) { if (event.target === event.currentTarget) { showExpenseModal = showCategoryModal = showGroupModal = showCardModal = showPayrollModal = showCustomizeModal = false; editingExpense = editingCategory = editingGroup = editingCard = editingPayroll = null; render(); } }
 
 function updateConvertPreview() {
   const el = document.getElementById('convertPreview');
