@@ -105,13 +105,14 @@ let showCategoryModal = false;
 let editingCategory = null;
 let showGroupModal = false;
 let editingGroup = null;
-let activeGroupFilter = null; // when viewing a single trip's expenses
 let showCardModal = false;
 let editingCard = null;
 let showPayrollModal = false;
 let editingPayroll = null;
 let showCustomizeModal = false; // dashboard layout editor
 let showMenu = false; // "More" nav dropdown
+function emptyFilters() { return { search: '', categoryId: '', cardId: '', groupId: '', start: '', end: '', min: '', max: '' }; }
+let expenseFilters = emptyFilters();
 // Dashboard time-period filter (independent of the header month picker).
 let dashPeriod = { mode: 'month', preset: 'thisMonth', month: new Date().toISOString().slice(0, 7), start: null, end: null };
 let chartInstances = {};
@@ -699,25 +700,79 @@ function kpiCard(title, value, subtitle, color, icon, extra = '') {
 }
 
 // ─── Expenses ─────────────────────────────────────────────────────────────────
+function getFilteredExpenses() {
+  const f = expenseFilters;
+  return data.expenses.filter(e => {
+    if (f.search) { const q = f.search.toLowerCase(); if (!(`${e.description} ${e.note || ''}`.toLowerCase().includes(q))) return false; }
+    if (f.categoryId && e.categoryId !== f.categoryId) return false;
+    if (f.cardId) { if (f.cardId === '__none__' ? e.cardId : e.cardId !== f.cardId) return false; }
+    if (f.groupId) { if (f.groupId === '__none__' ? e.groupId : e.groupId !== f.groupId) return false; }
+    if (f.start && e.date < f.start) return false;
+    if (f.end && e.date > f.end) return false;
+    const base = expenseBase(e);
+    if (f.min !== '' && base < parseFloat(f.min)) return false;
+    if (f.max !== '' && base > parseFloat(f.max)) return false;
+    return true;
+  });
+}
+
 function buildExpenses() {
-  const grp = activeGroupFilter ? getGroupById(activeGroupFilter) : null;
-  let exps = grp ? getGroupExpenses(activeGroupFilter) : getMonthExpenses(activeMonth);
-  exps = exps.slice().sort((a, b) => b.date.localeCompare(a.date));
-  const title = grp ? `${grp.icon} ${grp.name} — ${exps.length} expenses` : `${exps.length} Expenses — ${monthLabel(activeMonth)}`;
+  const f = expenseFilters;
+  const exps = getFilteredExpenses().sort((a, b) => b.date.localeCompare(a.date));
+  const activeCount = Object.values(f).filter(v => v !== '').length;
+  const total = exps.reduce((s, e) => s + expenseBase(e), 0);
+  const sel = (cur, val) => cur === val ? 'selected' : '';
   return `
-  <div class="card rounded-xl overflow-hidden">
-    <div class="px-5 py-4 border-b border-slate-700 flex items-center justify-between">
-      <div class="flex items-center gap-3">
-        ${grp ? `<button onclick="clearGroupFilter()" class="text-slate-400 hover:text-white text-sm">&larr; All</button>` : ''}
-        <h3 class="font-semibold text-slate-200">${title}</h3>
+  <div class="space-y-4">
+    <!-- Filter bar -->
+    <div class="card rounded-xl p-4 space-y-3">
+      <div class="flex items-center justify-between">
+        <span class="text-sm font-medium text-slate-200">🔎 Filters ${activeCount ? `<span class="text-xs text-indigo-400">(${activeCount} active)</span>` : ''}</span>
+        ${activeCount ? `<button onclick="clearFilters()" class="text-xs text-slate-400 hover:text-white">Clear all</button>` : ''}
       </div>
+      <input id="filterSearch" type="text" placeholder="Search description or note…" value="${escapeHtml(f.search)}"
+        oninput="setFilter('search', this.value)" class="input-field w-full rounded-lg px-3 py-2 text-sm" />
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
+        <select onchange="setFilter('categoryId', this.value)" class="input-field rounded-lg px-2 py-2 text-sm">
+          <option value="">All categories</option>
+          ${data.categories.map(c => `<option value="${c.id}" ${sel(f.categoryId,c.id)}>${c.icon} ${c.name}</option>`).join('')}
+        </select>
+        <select onchange="setFilter('cardId', this.value)" class="input-field rounded-lg px-2 py-2 text-sm">
+          <option value="">All cards</option>
+          <option value="__none__" ${sel(f.cardId,'__none__')}>— No card —</option>
+          ${data.cards.map(c => `<option value="${c.id}" ${sel(f.cardId,c.id)}>${c.icon} ${c.name}</option>`).join('')}
+        </select>
+        <select onchange="setFilter('groupId', this.value)" class="input-field rounded-lg px-2 py-2 text-sm">
+          <option value="">All trips</option>
+          <option value="__none__" ${sel(f.groupId,'__none__')}>— No trip —</option>
+          ${data.groups.map(g => `<option value="${g.id}" ${sel(f.groupId,g.id)}>${g.icon} ${g.name}</option>`).join('')}
+        </select>
+        <input type="date" value="${f.start}" onchange="setFilter('start', this.value)" title="From date" class="input-field rounded-lg px-2 py-2 text-sm" />
+        <input type="date" value="${f.end}" onchange="setFilter('end', this.value)" title="To date" class="input-field rounded-lg px-2 py-2 text-sm" />
+        <div class="flex gap-1">
+          <input type="number" placeholder="Min $" value="${f.min}" onchange="setFilter('min', this.value)" class="input-field rounded-lg px-2 py-2 text-sm w-full" />
+          <input type="number" placeholder="Max $" value="${f.max}" onchange="setFilter('max', this.value)" class="input-field rounded-lg px-2 py-2 text-sm w-full" />
+        </div>
+      </div>
+      <div class="flex flex-wrap gap-1.5">
+        <span class="text-xs text-slate-500 self-center mr-1">Quick dates:</span>
+        ${[['thisMonth','This month'],['lastMonth','Last month'],['ytd','This year'],['all','All time']].map(([id,lbl]) =>
+          `<button onclick="setFilterDates('${id}')" class="px-2 py-1 rounded-lg text-xs bg-slate-700 text-slate-300 hover:bg-slate-600 transition-colors">${lbl}</button>`).join('')}
+      </div>
+    </div>
+
+    <!-- Results -->
+    <div class="card rounded-xl overflow-hidden">
+    <div class="px-5 py-4 border-b border-slate-700 flex items-center justify-between">
+      <h3 class="font-semibold text-slate-200">${exps.length} ${exps.length===1?'expense':'expenses'}${activeCount?' (filtered)':''}</h3>
       <button onclick="openExpenseModal()" class="btn-primary text-white rounded-lg px-3 py-1.5 text-sm font-medium">+ Add</button>
     </div>
     ${exps.length === 0 ? `
       <div class="py-16 text-center text-slate-500">
         <div class="text-4xl mb-3">🧾</div>
-        <p>No expenses yet for ${monthLabel(activeMonth)}</p>
-        <button onclick="openExpenseModal()" class="mt-4 btn-primary text-white rounded-lg px-4 py-2 text-sm">Add your first expense</button>
+        <p>${activeCount ? 'No expenses match these filters.' : 'No expenses yet'}</p>
+        ${activeCount ? `<button onclick="clearFilters()" class="mt-4 bg-slate-700 hover:bg-slate-600 text-white rounded-lg px-4 py-2 text-sm">Clear filters</button>`
+          : `<button onclick="openExpenseModal()" class="mt-4 btn-primary text-white rounded-lg px-4 py-2 text-sm">Add your first expense</button>`}
       </div>` :
     `<div class="divide-y divide-slate-700/50">
       ${exps.map(e => {
@@ -744,9 +799,10 @@ function buildExpenses() {
       }).join('')}
     </div>
     <div class="px-5 py-3 border-t border-slate-700 flex justify-between items-center">
-      <span class="text-sm text-slate-400">Total</span>
-      <span class="font-bold text-red-400">${formatCurrency(exps.reduce((s,e)=>s+expenseBase(e),0))}</span>
+      <span class="text-sm text-slate-400">Total${activeCount?' (filtered)':''}</span>
+      <span class="font-bold text-red-400">${formatCurrency(total)}</span>
     </div>`}
+    </div>
   </div>`;
 }
 
@@ -1106,7 +1162,7 @@ function buildExpenseModal() {
           <label class="text-xs text-slate-400 uppercase tracking-wider">Trip / Group (optional)</label>
           <select id="exp_group" class="input-field w-full rounded-lg px-3 py-2.5 mt-1">
             <option value="">— None (regular expense) —</option>
-            ${data.groups.map(g => { const sel = e ? e.groupId===g.id : activeGroupFilter===g.id; return `<option value="${g.id}" ${sel?'selected':''}>${g.icon} ${g.name}</option>`; }).join('')}
+            ${data.groups.map(g => { const def = (expenseFilters.groupId && expenseFilters.groupId !== '__none__') ? expenseFilters.groupId : null; const sel = e ? e.groupId===g.id : def===g.id; return `<option value="${g.id}" ${sel?'selected':''}>${g.icon} ${g.name}</option>`; }).join('')}
           </select>
         </div>
         <div>
@@ -1475,7 +1531,7 @@ function tabLabel(t) {
 function toggleMenu(event) { event.stopPropagation(); showMenu = !showMenu; render(); }
 function closeMenu() { showMenu = false; render(); }
 
-function switchTab(tab) { activeTab = tab; showMenu = false; if (tab !== 'expenses') activeGroupFilter = null; render(); }
+function switchTab(tab) { activeTab = tab; showMenu = false; render(); }
 
 function setPreset(id) {
   const now = new Date();
@@ -1545,8 +1601,23 @@ function deleteDashboard() {
   render();
 }
 
-function viewGroup(id) { activeGroupFilter = id; activeTab = 'expenses'; render(); }
-function clearGroupFilter() { activeGroupFilter = null; render(); }
+function viewGroup(id) { expenseFilters = { ...emptyFilters(), groupId: id }; activeTab = 'expenses'; render(); }
+
+function setFilter(key, val) {
+  expenseFilters[key] = val;
+  render();
+  if (key === 'search') { const el = document.getElementById('filterSearch'); if (el) { el.focus(); const v = el.value; el.value = ''; el.value = v; } }
+}
+function clearFilters() { expenseFilters = emptyFilters(); render(); }
+function setFilterDates(preset) {
+  const now = new Date();
+  const ymd = d => d.toISOString().slice(0, 10);
+  if (preset === 'all') { expenseFilters.start = ''; expenseFilters.end = ''; }
+  else if (preset === 'thisMonth') { expenseFilters.start = ymd(new Date(now.getFullYear(), now.getMonth(), 1)); expenseFilters.end = ymd(new Date(now.getFullYear(), now.getMonth() + 1, 0)); }
+  else if (preset === 'lastMonth') { expenseFilters.start = ymd(new Date(now.getFullYear(), now.getMonth() - 1, 1)); expenseFilters.end = ymd(new Date(now.getFullYear(), now.getMonth(), 0)); }
+  else if (preset === 'ytd') { expenseFilters.start = now.getFullYear() + '-01-01'; expenseFilters.end = ymd(now); }
+  render();
+}
 
 function openExpenseModal(id) {
   editingExpense = id ? data.expenses.find(e => e.id === id) : null;
@@ -1700,7 +1771,7 @@ function deleteGroup(id) {
   if (!confirm(`Delete this trip? Its ${st.count} expense${st.count===1?'':'s'} will be kept as regular expenses (still counted in your KPIs).`)) return;
   data.expenses.forEach(e => { if (e.groupId === id) e.groupId = null; });
   data.groups = data.groups.filter(g => g.id !== id);
-  if (activeGroupFilter === id) activeGroupFilter = null;
+  if (expenseFilters.groupId === id) expenseFilters.groupId = '';
   saveData(data);
   render();
 }
