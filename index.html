@@ -506,10 +506,13 @@ function buildDashboard() {
           const budget = cat.budget * factor;
           const pct = budget > 0 ? Math.min(100, (spent / budget) * 100) : 0;
           const over = spent > budget;
+          const share = total > 0 ? (spent / total) * 100 : 0;
           return `
           <div>
             <div class="flex justify-between items-center mb-1">
-              <span class="text-sm text-slate-300">${cat.icon} ${cat.name}</span>
+              <span class="text-sm text-slate-300 flex items-center gap-2">${cat.icon} ${cat.name}
+                <span class="text-xs px-1.5 py-0.5 rounded-full" style="background:${cat.color}22;color:${cat.color}">${share.toFixed(1)}% of spend</span>
+              </span>
               <span class="text-sm ${over ? 'text-red-400' : 'text-slate-400'}">${formatCurrency(spent)} <span class="text-slate-500">/ ${formatCurrency(budget)}</span></span>
             </div>
             <div class="progress-bar h-2">
@@ -1286,11 +1289,16 @@ function renderDashboardCharts() {
     });
     const legend = document.getElementById('donutLegend');
     if (legend) {
-      legend.innerHTML = cats.map(c => `
+      const legendTotal = cats.reduce((s, c) => s + (byCategory[c.id] || 0), 0);
+      legend.innerHTML = cats.map(c => {
+        const amt = byCategory[c.id] || 0;
+        const share = legendTotal > 0 ? (amt / legendTotal) * 100 : 0;
+        return `
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-1.5"><div class="w-2.5 h-2.5 rounded-full flex-shrink-0" style="background:${c.color}"></div><span class="text-slate-300">${c.icon} ${c.name}</span></div>
-          <span class="text-slate-400">${formatCurrency(byCategory[c.id]||0)}</span>
-        </div>`).join('');
+          <span class="text-slate-400">${formatCurrency(amt)} <span class="text-slate-500">· ${share.toFixed(1)}%</span></span>
+        </div>`;
+      }).join('');
     }
   }
 }
