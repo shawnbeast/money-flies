@@ -370,7 +370,7 @@ function buildLayout() {
         </button>
       `).join('')}
       ${(() => {
-        const moreTabs = ['trips','cards','income','budgets','analytics'];
+        const moreTabs = ['trips','cards','income','budgets'];
         const moreActive = moreTabs.includes(activeTab);
         return `
         <div class="relative">
@@ -396,7 +396,6 @@ function buildLayout() {
       ${activeTab === 'cards' ? buildCards() : ''}
       ${activeTab === 'income' ? buildIncome() : ''}
       ${activeTab === 'budgets' ? buildBudgets() : ''}
-      ${activeTab === 'analytics' ? buildAnalytics() : ''}
     </main>
   </div>
 
@@ -441,6 +440,9 @@ const DASHBOARD_WIDGETS = [
   { id: 'donut',         label: 'Category Breakdown (donut)' },
   { id: 'budgetBars',    label: 'Budget vs Actual + category %' },
   { id: 'cardBars',      label: 'Spending by Card' },
+  { id: 'overview6mo',   label: '6-Month Spending Overview (bar chart)' },
+  { id: 'topCats',       label: 'Top Categories (6 months)' },
+  { id: 'monthlySummary',label: 'Monthly Summary table' },
 ];
 
 function getDashboardLayout() {
@@ -567,6 +569,68 @@ function buildDashboard() {
         <div class="space-y-3">
           ${rows.map(c => bar(c.card.icon, c.card.name + (c.card.last4 ? ' ••' + c.card.last4 : ''), c.card.color, c.amt)).join('')}
           ${unassigned > 0 ? bar('❔', 'Unassigned', '#94a3b8', unassigned) : ''}
+        </div>
+      </div>`;
+    },
+
+    overview6mo: () => `
+      <div class="card rounded-xl p-5">
+        <h3 class="font-semibold text-slate-200 mb-4">6-Month Spending Overview</h3>
+        <canvas id="barChart" height="120"></canvas>
+      </div>`,
+
+    topCats: () => {
+      const months6 = getLast6Months();
+      const top = data.categories.map(c => ({ cat: c, total: months6.reduce((s, m) => s + (getMonthTotals(m).byCategory[c.id] || 0), 0) }))
+        .sort((a, b) => b.total - a.total).slice(0, 5);
+      const maxVal = (top[0] && top[0].total) || 1;
+      return `
+      <div class="card rounded-xl p-5">
+        <h3 class="font-semibold text-slate-200 mb-4">Top Categories (6 months)</h3>
+        <div class="space-y-3">
+          ${top.map((item, i) => `
+            <div class="flex items-center gap-3">
+              <span class="text-slate-500 text-xs w-4">${i+1}</span>
+              <span class="text-lg">${item.cat.icon}</span>
+              <div class="flex-1">
+                <div class="flex justify-between text-sm mb-1">
+                  <span class="text-slate-300">${item.cat.name}</span>
+                  <span class="text-slate-400">${formatCurrency(item.total)}</span>
+                </div>
+                <div class="progress-bar h-2"><div style="width:${(item.total/maxVal)*100}%;background:${item.cat.color}" class="h-full rounded-full"></div></div>
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>`;
+    },
+
+    monthlySummary: () => {
+      const months6 = getLast6Months().reverse();
+      const budget = data.categories.reduce((s, c) => s + c.budget, 0);
+      return `
+      <div class="card rounded-xl p-5">
+        <h3 class="font-semibold text-slate-200 mb-4">Monthly Summary</h3>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-slate-400 text-xs uppercase tracking-wider">
+                <th class="text-left pb-3">Month</th><th class="text-right pb-3">Spent</th><th class="text-right pb-3">Budget</th><th class="text-right pb-3">Status</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-700/50">
+              ${months6.map(m => {
+                const { total: mt } = getMonthTotals(m);
+                const over = mt > budget;
+                return `
+                <tr class="hover:bg-slate-700/20">
+                  <td class="py-2.5 text-slate-300">${monthLabel(m)}</td>
+                  <td class="py-2.5 text-right ${over?'text-red-400':'text-slate-300'}">${formatCurrency(mt)}</td>
+                  <td class="py-2.5 text-right text-slate-400">${formatCurrency(budget)}</td>
+                  <td class="py-2.5 text-right"><span class="px-2 py-0.5 rounded-full text-xs ${over?'bg-red-500/20 text-red-400':'bg-emerald-500/20 text-emerald-400'}">${over?'Over':'OK'}</span></td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
         </div>
       </div>`;
     },
@@ -954,78 +1018,6 @@ function buildBudgets() {
 }
 
 // ─── Analytics ────────────────────────────────────────────────────────────────
-function buildAnalytics() {
-  const months6 = getLast6Months();
-  const topCats = data.categories.map(c => ({
-    cat: c,
-    total: months6.reduce((s, m) => s + (getMonthTotals(m).byCategory[c.id] || 0), 0)
-  })).sort((a, b) => b.total - a.total).slice(0, 5);
-
-  return `
-  <div class="space-y-6">
-    <!-- Monthly comparison chart -->
-    <div class="card rounded-xl p-5">
-      <h3 class="font-semibold text-slate-200 mb-4">6-Month Spending Overview</h3>
-      <canvas id="barChart" height="120"></canvas>
-    </div>
-
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <!-- Top categories (6 months) -->
-      <div class="card rounded-xl p-5">
-        <h3 class="font-semibold text-slate-200 mb-4">Top Categories (6 months)</h3>
-        <div class="space-y-3">
-          ${topCats.map((item, i) => {
-            const maxVal = topCats[0].total || 1;
-            return `
-            <div class="flex items-center gap-3">
-              <span class="text-slate-500 text-xs w-4">${i+1}</span>
-              <span class="text-lg">${item.cat.icon}</span>
-              <div class="flex-1">
-                <div class="flex justify-between text-sm mb-1">
-                  <span class="text-slate-300">${item.cat.name}</span>
-                  <span class="text-slate-400">${formatCurrency(item.total)}</span>
-                </div>
-                <div class="progress-bar h-2"><div style="width:${(item.total/maxVal)*100}%;background:${item.cat.color}" class="h-full rounded-full"></div></div>
-              </div>
-            </div>`;
-          }).join('')}
-        </div>
-      </div>
-
-      <!-- Monthly stats table -->
-      <div class="card rounded-xl p-5">
-        <h3 class="font-semibold text-slate-200 mb-4">Monthly Summary</h3>
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <thead>
-              <tr class="text-slate-400 text-xs uppercase tracking-wider">
-                <th class="text-left pb-3">Month</th>
-                <th class="text-right pb-3">Spent</th>
-                <th class="text-right pb-3">Budget</th>
-                <th class="text-right pb-3">Status</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-slate-700/50">
-              ${months6.reverse().map(m => {
-                const { total } = getMonthTotals(m);
-                const budget = data.categories.reduce((s,c)=>s+c.budget,0);
-                const over = total > budget;
-                return `
-                <tr class="hover:bg-slate-700/20">
-                  <td class="py-2.5 text-slate-300">${monthLabel(m)}</td>
-                  <td class="py-2.5 text-right ${over?'text-red-400':'text-slate-300'}">${formatCurrency(total)}</td>
-                  <td class="py-2.5 text-right text-slate-400">${formatCurrency(budget)}</td>
-                  <td class="py-2.5 text-right"><span class="px-2 py-0.5 rounded-full text-xs ${over?'bg-red-500/20 text-red-400':'bg-emerald-500/20 text-emerald-400'}">${over?'Over':'OK'}</span></td>
-                </tr>`;
-              }).join('')}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  </div>`;
-}
-
 // ─── Modals ───────────────────────────────────────────────────────────────────
 function buildExpenseModal() {
   const e = editingExpense;
@@ -1322,8 +1314,7 @@ function buildCustomizeModal() {
 // ─── Chart rendering ──────────────────────────────────────────────────────────
 function renderCharts() {
   destroyCharts();
-  if (activeTab === 'dashboard') renderDashboardCharts();
-  if (activeTab === 'analytics') renderAnalyticsCharts();
+  if (activeTab === 'dashboard') { renderDashboardCharts(); renderAnalyticsCharts(); }
   if (activeTab === 'cards') renderCardChart();
 }
 
@@ -1434,7 +1425,7 @@ function attachEvents() {
 }
 
 function tabLabel(t) {
-  return { dashboard:'📊 Dashboard', expenses:'📋 Expenses', trips:'✈️ Trips', cards:'💳 Cards', income:'💵 Income', budgets:'🎯 Budgets', analytics:'📈 Analytics' }[t] || t;
+  return { dashboard:'📊 Dashboard', expenses:'📋 Expenses', trips:'✈️ Trips', cards:'💳 Cards', income:'💵 Income', budgets:'🎯 Budgets' }[t] || t;
 }
 function toggleMenu(event) { event.stopPropagation(); showMenu = !showMenu; render(); }
 function closeMenu() { showMenu = false; render(); }
