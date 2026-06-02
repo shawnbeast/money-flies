@@ -445,13 +445,36 @@ const DASHBOARD_WIDGETS = [
   { id: 'monthlySummary',label: 'Monthly Summary table' },
 ];
 
+function defaultLayout() { return DASHBOARD_WIDGETS.map(w => ({ id: w.id, visible: true })); }
+
+// Ensure at least one dashboard exists and an active one is selected; returns the active dashboard.
+function ensureDashboards() {
+  if (!Array.isArray(data.dashboards) || data.dashboards.length === 0) {
+    data.dashboards = [{
+      id: uuid(),
+      name: 'My Dashboard',
+      layout: (Array.isArray(data.dashboardLayout) && data.dashboardLayout.length) ? data.dashboardLayout : defaultLayout(),
+      period: null,
+    }];
+    data.activeDashboardId = data.dashboards[0].id;
+    saveData(data);
+  }
+  if (!data.activeDashboardId || !data.dashboards.find(d => d.id === data.activeDashboardId)) {
+    data.activeDashboardId = data.dashboards[0].id;
+  }
+  return data.dashboards.find(d => d.id === data.activeDashboardId);
+}
+
 function getDashboardLayout() {
+  const dash = ensureDashboards();
   const known = new Set(DASHBOARD_WIDGETS.map(w => w.id));
-  let layout = (Array.isArray(data.dashboardLayout) ? data.dashboardLayout : []).filter(w => w && known.has(w.id));
+  let layout = (Array.isArray(dash.layout) ? dash.layout : []).filter(w => w && known.has(w.id));
   DASHBOARD_WIDGETS.forEach(w => { if (!layout.find(l => l.id === w.id)) layout.push({ id: w.id, visible: true }); });
+  dash.layout = layout;
   return layout;
 }
 function widgetLabel(id) { return (DASHBOARD_WIDGETS.find(w => w.id === id) || {}).label || id; }
+function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
 
 function buildDashboard() {
   const { start, end } = periodRange();
@@ -640,11 +663,23 @@ function buildDashboard() {
 
   return `
   <div class="space-y-6">
+    ${buildDashboardSwitcher()}
     ${buildPeriodBar()}
     <div class="flex justify-end -mt-2 -mb-2">
       <button onclick="openCustomizeModal()" class="text-xs text-slate-400 hover:text-white flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-slate-700/50 transition-colors">⚙️ Customize dashboard</button>
     </div>
     ${body || '<p class="text-center text-slate-500 py-10">All sections are hidden. Tap ⚙️ Customize dashboard to turn some on.</p>'}
+  </div>`;
+}
+
+function buildDashboardSwitcher() {
+  ensureDashboards();
+  return `
+  <div class="flex items-center gap-2 flex-wrap">
+    ${data.dashboards.map(d => `
+      <button onclick="switchDashboard('${d.id}')" class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${d.id===data.activeDashboardId ? 'tab-active text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}">${escapeHtml(d.name)}</button>
+    `).join('')}
+    <button onclick="createDashboard()" class="px-3 py-1.5 rounded-lg text-sm font-medium bg-slate-800 text-slate-400 hover:text-white border border-dashed border-slate-600 transition-colors">＋ New</button>
   </div>`;
 }
 
@@ -1282,14 +1317,24 @@ function buildPayrollModal() {
 
 function buildCustomizeModal() {
   const layout = getDashboardLayout();
+  const dash = ensureDashboards();
   return `
   <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
-    <div class="card rounded-2xl w-full max-w-md p-6 space-y-4" onclick="event.stopPropagation()">
+    <div class="card rounded-2xl w-full max-w-md p-6 space-y-4 max-h-[90vh] overflow-y-auto scrollbar-thin" onclick="event.stopPropagation()">
       <div class="flex items-center justify-between">
         <h2 class="font-semibold text-lg">⚙️ Customize Dashboard</h2>
         <button onclick="closeCustomizeModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
       </div>
-      <p class="text-xs text-slate-400 -mt-2">Show/hide sections and reorder them. Changes save automatically.</p>
+      <div>
+        <label class="text-xs text-slate-400 uppercase tracking-wider">Dashboard name</label>
+        <div class="flex gap-2 mt-1">
+          <input id="dashName" type="text" value="${escapeHtml(dash.name)}" onchange="renameDashboard(this.value)"
+            class="input-field flex-1 rounded-lg px-3 py-2.5" />
+          <button onclick="deleteDashboard()" ${data.dashboards.length<=1?'disabled':''}
+            class="px-3 rounded-lg text-sm bg-slate-700 hover:bg-red-500/30 text-slate-300 hover:text-red-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors" title="Delete this dashboard">🗑️</button>
+        </div>
+      </div>
+      <p class="text-xs text-slate-400 -mt-1">Show/hide sections and reorder them. Each dashboard saves its own layout and time period.</p>
       <div class="space-y-2">
         ${layout.map((w, i) => `
           <div class="flex items-center gap-3 bg-slate-800/60 rounded-lg px-3 py-2.5">
@@ -1447,6 +1492,7 @@ function setPreset(id) {
   } else if (id === 'ytd') {
     dashPeriod = { mode: 'range', preset: 'ytd', month: ym(now), start: now.getFullYear() + '-01-01', end: ymd(now) };
   }
+  persistActivePeriod();
   render();
 }
 
@@ -1455,6 +1501,47 @@ function applyCustomRange() {
   const end = document.getElementById('rangeEnd').value;
   if (!start || !end) return;
   dashPeriod = { mode: 'range', preset: 'custom', month: dashPeriod.month, start, end };
+  persistActivePeriod();
+  render();
+}
+
+function persistActivePeriod() { const d = ensureDashboards(); d.period = { ...dashPeriod }; saveData(data); }
+
+function switchDashboard(id) {
+  ensureDashboards();
+  data.activeDashboardId = id;
+  const d = data.dashboards.find(x => x.id === id);
+  if (d && d.period) dashPeriod = { ...d.period };
+  saveData(data);
+  render();
+}
+
+function createDashboard() {
+  ensureDashboards();
+  const d = { id: uuid(), name: 'Dashboard ' + (data.dashboards.length + 1), layout: defaultLayout(), period: { ...dashPeriod } };
+  data.dashboards.push(d);
+  data.activeDashboardId = d.id;
+  saveData(data);
+  showCustomizeModal = true; // open so they can rename / configure right away
+  render();
+}
+
+function renameDashboard(val) {
+  const d = ensureDashboards();
+  d.name = (val || '').trim() || 'Untitled';
+  saveData(data);
+  render();
+}
+
+function deleteDashboard() {
+  ensureDashboards();
+  if (data.dashboards.length <= 1) { alert('You need at least one dashboard.'); return; }
+  if (!confirm('Delete this dashboard? (Your expenses and data are not affected.)')) return;
+  data.dashboards = data.dashboards.filter(d => d.id !== data.activeDashboardId);
+  data.activeDashboardId = data.dashboards[0].id;
+  if (data.dashboards[0].period) dashPeriod = { ...data.dashboards[0].period };
+  showCustomizeModal = false;
+  saveData(data);
   render();
 }
 
@@ -1474,7 +1561,7 @@ function closeCardModal() { showCardModal = false; editingCard = null; render();
 function closePayrollModal() { showPayrollModal = false; editingPayroll = null; render(); }
 function openCustomizeModal() { showCustomizeModal = true; showMenu = false; render(); }
 function closeCustomizeModal() { showCustomizeModal = false; render(); }
-function saveDashboardLayout(layout) { data.dashboardLayout = layout; saveData(data); }
+function saveDashboardLayout(layout) { const d = ensureDashboards(); d.layout = layout; saveData(data); }
 function toggleWidget(id) {
   const layout = getDashboardLayout();
   const w = layout.find(l => l.id === id); if (w) w.visible = !w.visible;
@@ -1488,7 +1575,7 @@ function moveWidget(id, dir) {
   saveDashboardLayout(layout); render();
 }
 function resetDashboardLayout() {
-  saveDashboardLayout(DASHBOARD_WIDGETS.map(w => ({ id: w.id, visible: true })));
+  saveDashboardLayout(defaultLayout());
   render();
 }
 function closeModal(event) { if (event.target === event.currentTarget) { showExpenseModal = showCategoryModal = showGroupModal = showCardModal = showPayrollModal = showCustomizeModal = false; editingExpense = editingCategory = editingGroup = editingCard = editingPayroll = null; render(); } }
@@ -1723,6 +1810,7 @@ function importData(event) {
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
+(() => { const d = ensureDashboards(); if (d && d.period) dashPeriod = { ...d.period }; })();
 render();
 refreshRates(); // fetch live FX rates in the background, then re-render
 
