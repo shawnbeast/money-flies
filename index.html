@@ -15,6 +15,7 @@
 <link rel="apple-touch-icon" href="icon.svg" />
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   body { background: #0f172a; font-family: 'Inter', system-ui, sans-serif; }
   .glass { background: rgba(255,255,255,0.05); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.08); }
@@ -70,30 +71,48 @@ const CURRENCIES = {
 };
 const FALLBACK_RATES = { USD:1, EUR:0.92, GBP:0.79, JPY:157, CAD:1.36, AUD:1.52, CHF:0.88, CNY:7.24, INR:83.3, MXN:18.6, BRL:5.43 };
 
-function loadData() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (!parsed.groups) parsed.groups = []; // migrate older saves
-      if (!parsed.cards) parsed.cards = [];
-      if (!parsed.payrolls) parsed.payrolls = [];
-      if (!parsed.baseCurrency) parsed.baseCurrency = 'CAD';
-      if (!parsed.rates) parsed.rates = { base: 'USD', table: { ...FALLBACK_RATES }, fetchedAt: null };
-      // migrate expenses to carry original currency (legacy = stored in base)
-      (parsed.expenses || []).forEach(e => {
-        if (e.currency == null) e.currency = parsed.baseCurrency || 'CAD';
-        if (e.origAmount == null) e.origAmount = e.amount;
-      });
-      return parsed;
-    }
-  } catch(e) {}
+// ─── Supabase (auth + cloud sync) ───────────────────────────────────────────
+const SUPABASE_URL = 'https://fzcaajhlpvkpqrhfwwdd.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ6Y2FhamhscHZrcHFyaGZ3d2RkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0NjAyOTcsImV4cCI6MjA5NjAzNjI5N30.Y_lDdhzC65w0xcCh15dRF-N1Ovxnv1vO7vfpqs-PzPw';
+let supa = null;          // supabase client
+let currentUser = null;   // logged-in user (or null)
+let cloudSaveTimer = null; // debounce handle for cloud writes
+let authBusy = false;     // login in progress
+
+function defaultData() {
   return { expenses: [], categories: DEFAULT_CATEGORIES, income: 3000, groups: [], cards: [], payrolls: [],
            baseCurrency: 'CAD', rates: { base: 'USD', table: { ...FALLBACK_RATES }, fetchedAt: null } };
 }
 
-function saveData(data) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+// Apply forward-compatible migrations to a loaded data object (from cache or cloud).
+function migrateData(parsed) {
+  if (!parsed || typeof parsed !== 'object') return defaultData();
+  if (!parsed.expenses) parsed.expenses = [];
+  if (!parsed.categories) parsed.categories = DEFAULT_CATEGORIES;
+  if (parsed.income == null) parsed.income = 3000;
+  if (!parsed.groups) parsed.groups = [];
+  if (!parsed.cards) parsed.cards = [];
+  if (!parsed.payrolls) parsed.payrolls = [];
+  if (!parsed.baseCurrency) parsed.baseCurrency = 'CAD';
+  if (!parsed.rates) parsed.rates = { base: 'USD', table: { ...FALLBACK_RATES }, fetchedAt: null };
+  parsed.expenses.forEach(e => {
+    if (e.currency == null) e.currency = parsed.baseCurrency || 'CAD';
+    if (e.origAmount == null) e.origAmount = e.amount;
+  });
+  return parsed;
+}
+
+function loadData() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return migrateData(JSON.parse(raw));
+  } catch(e) {}
+  return defaultData();
+}
+
+function saveData(d) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(d));
+  saveToCloud(); // sync to the logged-in user's account (no-op if not signed in)
 }
 
 let data = loadData();
@@ -150,7 +169,7 @@ async function refreshRates() {
     Object.keys(CURRENCIES).forEach(c => { finalTable[c] = table[c] != null ? table[c] : FALLBACK_RATES[c]; });
     data.rates = { base: 'USD', table: finalTable, fetchedAt: new Date().toISOString() };
     saveData(data);
-    render();
+    if (currentUser) render();
   } catch (e) {
     // offline or blocked → silently keep fallback/cached rates
   }
@@ -360,6 +379,7 @@ function buildLayout() {
         <button onclick="openExpenseModal()" class="btn-primary text-white rounded-lg px-4 py-2 text-sm font-medium transition-all">
           + Add Expense
         </button>
+        ${(currentUser && !currentUser.local) ? `<button onclick="logout()" title="Signed in as ${escapeHtml(currentUser.email||'')} — sign out" class="bg-slate-700 hover:bg-red-500/30 text-slate-300 hover:text-white rounded-lg px-3 py-2 text-sm transition-colors">⎋</button>` : ''}
       </div>
     </header>
 
@@ -1626,10 +1646,11 @@ function resetAllData() {
   if (!confirm('Reset ALL data? This permanently erases every expense, card, trip, payroll, dashboard and setting on this device. This cannot be undone.')) return;
   if (!confirm('Are you absolutely sure? Tap Cancel if you have not exported a backup yet.')) return;
   try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
-  data = loadData();
+  data = defaultData();
   activeTab = 'dashboard';
   expenseFilters = emptyFilters();
   dashPeriod = { mode: 'month', preset: 'thisMonth', month: new Date().toISOString().slice(0, 7), start: null, end: null };
+  saveData(data); // also resets the cloud copy for the signed-in account
   render();
   alert('All data has been reset. Fresh start! 🌱');
 }
@@ -1904,10 +1925,132 @@ function importData(event) {
   reader.readAsText(file);
 }
 
+// ─── Auth + cloud sync ──────────────────────────────────────────────────────
+function applyActiveDashboardPeriod() {
+  const d = ensureDashboards();
+  if (d && d.period) dashPeriod = { ...d.period };
+}
+
+// Top-level: show the login screen, or the app, depending on auth.
+function renderRoot() {
+  if (currentUser) render();
+  else renderLogin();
+}
+
+function renderLogin() {
+  destroyCharts();
+  document.getElementById('app').innerHTML = `
+  <div class="min-h-screen flex items-center justify-center p-4">
+    <div class="card rounded-2xl w-full max-w-sm p-7 space-y-5">
+      <div class="text-center">
+        <div class="text-4xl">💸</div>
+        <h1 class="font-bold text-xl text-white mt-2">Money Flies</h1>
+        <p class="text-sm text-slate-400">Sign in to your account</p>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Email</label>
+          <input id="authEmail" type="email" autocomplete="email" placeholder="you@example.com"
+            class="input-field w-full rounded-lg px-3 py-2.5 mt-1" onkeydown="if(event.key==='Enter')doLogin()" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Password</label>
+          <input id="authPass" type="password" autocomplete="current-password" placeholder="••••••••"
+            class="input-field w-full rounded-lg px-3 py-2.5 mt-1" onkeydown="if(event.key==='Enter')doLogin()" />
+        </div>
+        <p id="authErr" class="text-xs text-red-400 min-h-[1rem]"></p>
+        <button id="authBtn" onclick="doLogin()" class="btn-primary text-white w-full rounded-lg py-2.5 text-sm font-medium transition-all">Sign in</button>
+      </div>
+      <p class="text-xs text-slate-500 text-center">Accounts are invite-only. Ask the owner to create one for you.</p>
+    </div>
+  </div>`;
+  const e = document.getElementById('authEmail'); if (e) e.focus();
+}
+
+async function doLogin() {
+  if (authBusy) return;
+  const emailEl = document.getElementById('authEmail'), passEl = document.getElementById('authPass'), errEl = document.getElementById('authErr'), btn = document.getElementById('authBtn');
+  const email = emailEl.value.trim(), password = passEl.value;
+  if (!email || !password) { errEl.textContent = 'Enter your email and password.'; return; }
+  authBusy = true; btn.textContent = 'Signing in…'; errEl.textContent = '';
+  try {
+    const { data: res, error } = await supa.auth.signInWithPassword({ email, password });
+    if (error) { errEl.textContent = error.message; return; }
+    currentUser = res.user;
+    await loadFromCloud();
+    applyActiveDashboardPeriod();
+    renderRoot();
+  } catch (err) {
+    errEl.textContent = 'Could not sign in (network?). Try again.';
+  } finally {
+    authBusy = false;
+    const b = document.getElementById('authBtn'); if (b) b.textContent = 'Sign in';
+  }
+}
+
+async function logout() {
+  if (!confirm('Sign out of Money Flies on this device?')) return;
+  try { await supa.auth.signOut(); } catch (e) {}
+  currentUser = null;
+  localStorage.removeItem(STORAGE_KEY); // clear cached data so the next user starts clean
+  data = loadData();
+  activeTab = 'dashboard';
+  renderRoot();
+}
+
+// Pull the signed-in user's data from the cloud (or migrate local data on first login).
+async function loadFromCloud() {
+  try {
+    const { data: row, error } = await supa.from('app_state').select('data').eq('user_id', currentUser.id).maybeSingle();
+    if (error) throw error;
+    if (row && row.data && Array.isArray(row.data.expenses)) {
+      data = migrateData(row.data);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      return;
+    }
+    // No cloud row yet → first time for this account.
+    const localHasData = data && Array.isArray(data.expenses) && data.expenses.length > 0;
+    if (localHasData && confirm('Importer les données déjà présentes sur cet appareil dans ce compte ? (Annuler = repartir à zéro)')) {
+      await saveToCloud(true); // push current local data up
+    } else {
+      data = defaultData();
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      await saveToCloud(true);
+    }
+  } catch (e) {
+    // Offline or error → fall back to the local cache so the app still works.
+    data = loadData();
+  }
+}
+
+// Save the current data blob to the cloud (debounced). No-op when signed out.
+function saveToCloud(immediate) {
+  if (!currentUser || !supa) return;
+  const doSave = () => supa.from('app_state')
+    .upsert({ user_id: currentUser.id, data, updated_at: new Date().toISOString() })
+    .then(({ error }) => { if (error) console.warn('cloud save failed', error.message); });
+  clearTimeout(cloudSaveTimer);
+  if (immediate) return doSave();
+  cloudSaveTimer = setTimeout(doSave, 800);
+}
+
 // ─── Boot ─────────────────────────────────────────────────────────────────────
-(() => { const d = ensureDashboards(); if (d && d.period) dashPeriod = { ...d.period }; })();
-render();
-refreshRates(); // fetch live FX rates in the background, then re-render
+async function boot() {
+  if (window.supabase && SUPABASE_URL.startsWith('http')) {
+    supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    try {
+      const { data: { session } } = await supa.auth.getSession();
+      if (session && session.user) { currentUser = session.user; await loadFromCloud(); }
+    } catch (e) {}
+  } else {
+    // Supabase unavailable (e.g. offline first load) → run local-only.
+    currentUser = { id: 'local', local: true };
+  }
+  applyActiveDashboardPeriod();
+  renderRoot();
+  refreshRates(); // fetch live FX rates in the background, then re-render
+}
+boot();
 
 // Register service worker so the app works offline after first load (no-op on file://).
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
