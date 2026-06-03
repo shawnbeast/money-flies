@@ -980,13 +980,19 @@ function buildIncome() {
   upcoming.sort((a,b) => a.date.localeCompare(b.date));
   upcoming = upcoming.slice(0, 8);
 
+  // Income for the displayed month (header month picker): recurring paydays that month + one-time that month only.
+  const mStart = activeMonth + '-01', mEnd = lastDayOfMonth(activeMonth);
+  const monthIncome = earnedInRange(mStart, mEnd);
+  const monthOneTime = oneTimeIncomeInRange(mStart, mEnd);
+
   return `
   <div class="space-y-6">
     <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-      ${kpiCard('Monthly Income', formatCurrency(monthly), payrolls.length ? 'from ' + payrolls.length + ' payroll source' + (payrolls.length>1?'s':'') : 'manual estimate', '#22c55e', '💵')}
+      ${kpiCard('Income — ' + monthLabel(activeMonth), formatCurrency(monthIncome), monthOneTime > 0 ? `incl. ${formatCurrency(monthOneTime)} one-time` : 'for the displayed month', '#22c55e', '💵')}
       ${kpiCard('Next Payday', next ? new Date(next.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—', next ? next.payroll.source + ' · ' + daysUntil(next.date) : 'No payroll set', '#6366f1', '📅')}
-      ${kpiCard('Annual Income', formatCurrency(monthly * 12), 'projected', '#f59e0b', '📈')}
+      ${kpiCard('Recurring / month', formatCurrency(monthly), payrolls.length ? 'from ' + payrolls.length + ' payroll source' + (payrolls.length>1?'s':'') : 'manual estimate', '#f59e0b', '🔁')}
     </div>
+    <p class="text-xs text-slate-500 -mt-3">💡 Use the month picker (top right) to change the displayed month. One-time income counts only in the month of its date.</p>
 
     <div class="card rounded-xl p-5 flex items-center gap-4 flex-wrap">
       <span class="text-2xl">💵</span>
