@@ -830,13 +830,13 @@ function buildExpenses() {
         <input id="filterSearch" type="text" placeholder="Search description or note…" value="${escapeHtml(f.search)}"
           oninput="setSearchFilter(this.value)" class="input-field w-full rounded-lg pl-9 pr-3 py-2.5 text-sm" />
       </div>
-      <div class="flex items-center gap-1.5 flex-wrap">
-        <span class="text-xs text-slate-500 mr-1">Quick:</span>
+      <div class="flex items-center gap-2 flex-wrap">
+        <button onclick="toggleFilters()" class="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-semibold ${advancedCount?'tab-active text-white':'bg-indigo-600/90 text-white hover:bg-indigo-600'} transition-colors shadow">
+          ⚙️ ${open ? 'Hide filters' : 'Show filters'}${advancedCount?` (${advancedCount})`:''} <span class="text-xs transition-transform ${open?'rotate-180':''}">▾</span>
+        </button>
+        <span class="text-xs text-slate-500 ml-1">Quick:</span>
         ${[['thisMonth','This month'],['lastMonth','Last month'],['ytd','This year'],['all','All time']].map(([id,l]) =>
           `<button onclick="setFilterDates('${id}')" class="px-2.5 py-1 rounded-lg text-xs bg-slate-700/60 text-slate-300 hover:bg-slate-600 transition-colors">${l}</button>`).join('')}
-        <button onclick="toggleFilters()" class="ml-auto flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium ${advancedCount?'tab-active text-white':'bg-slate-700/60 text-slate-300 hover:bg-slate-600'} transition-colors">
-          ⚙️ Filters${advancedCount?` (${advancedCount})`:''} <span class="transition-transform ${open?'rotate-180':''}">▾</span>
-        </button>
       </div>
       ${open ? `
       <div class="border-t border-slate-700/50 pt-3 space-y-3">
@@ -1067,15 +1067,18 @@ function buildIncome() {
   // Net for the current year so far (all income incl. other/one-time − all expenses).
   const yr = new Date().getFullYear();
   const yStart = yr + '-01-01';
+  const yEnd = yr + '-12-31';
   const todayStr = new Date().toISOString().slice(0, 10);
   const yEarned = earnedInRange(yStart, todayStr);   // payroll YTD + one-time/other income YTD
   const ySpent = rangeTotals(yStart, todayStr).total;
   const yNet = yEarned - ySpent;
+  const yProjected = earnedInRange(yStart, yEnd);     // full-year income (all paydays + one-time dated this year)
 
   return `
   <div class="space-y-6">
-    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
       ${kpiCard('Income — ' + monthLabel(activeMonth), formatCurrency(monthIncome), monthOneTime > 0 ? `incl. ${formatCurrency(monthOneTime)} other income` : 'for the displayed month', '#22c55e', '💵')}
+      ${kpiCard('Projected income (' + yr + ')', formatCurrency(yProjected), 'full-year estimate', '#06b6d4', '🗓️')}
       ${kpiCard('Net this year (' + yr + ')', (yNet < 0 ? '−' : '+') + formatCurrency(yNet), `${formatCurrency(yEarned)} in − ${formatCurrency(ySpent)} out`, yNet < 0 ? '#ef4444' : '#22c55e', '📈')}
       ${kpiCard('Recurring / month', formatCurrency(monthly), payrolls.length ? 'from ' + payrolls.length + ' payroll source' + (payrolls.length>1?'s':'') : 'manual estimate', '#f59e0b', '🔁')}
     </div>
