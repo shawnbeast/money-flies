@@ -80,7 +80,7 @@ let cloudSaveTimer = null; // debounce handle for cloud writes
 let authBusy = false;     // login in progress
 
 function defaultData() {
-  return { expenses: [], categories: DEFAULT_CATEGORIES, income: 3000, groups: [], cards: [], payrolls: [],
+  return { expenses: [], categories: DEFAULT_CATEGORIES, income: 3000, groups: [], cards: [], payrolls: [], oneTimeIncome: [],
            baseCurrency: 'CAD', rates: { base: 'USD', table: { ...FALLBACK_RATES }, fetchedAt: null } };
 }
 
@@ -93,6 +93,7 @@ function migrateData(parsed) {
   if (!parsed.groups) parsed.groups = [];
   if (!parsed.cards) parsed.cards = [];
   if (!parsed.payrolls) parsed.payrolls = [];
+  if (!parsed.oneTimeIncome) parsed.oneTimeIncome = [];
   if (!parsed.baseCurrency) parsed.baseCurrency = 'CAD';
   if (!parsed.rates) parsed.rates = { base: 'USD', table: { ...FALLBACK_RATES }, fetchedAt: null };
   parsed.expenses.forEach(e => {
@@ -128,6 +129,8 @@ let showCardModal = false;
 let editingCard = null;
 let showPayrollModal = false;
 let editingPayroll = null;
+let showIncomeModal = false;
+let editingIncome = null;
 let showCustomizeModal = false; // dashboard layout editor
 let showMenu = false; // "More" nav dropdown
 function emptyFilters() { return { search: '', categoryId: '', cardId: '', groupId: '', start: '', end: '', min: '', max: '' }; }
@@ -328,10 +331,18 @@ function periodMonthsFactor(start, end) {
 
 // Money actually earned within [start, end]: count scheduled paydays × pay amount.
 function earnedInRange(start, end) {
-  if (data.payrolls.length) {
-    return data.payrolls.reduce((s, p) => s + payDatesInRange(p, start, end).length * toBase(p.amount, p.currency || data.baseCurrency), 0);
-  }
-  return totalMonthlyIncome() * periodMonthsFactor(start, end); // estimate from manual income
+  let total = data.payrolls.length
+    ? data.payrolls.reduce((s, p) => s + payDatesInRange(p, start, end).length * toBase(p.amount, p.currency || data.baseCurrency), 0)
+    : totalMonthlyIncome() * periodMonthsFactor(start, end); // estimate from manual income
+  // add one-time / non-recurring income received within the range
+  total += oneTimeIncomeInRange(start, end);
+  return total;
+}
+
+function oneTimeIncomeInRange(start, end) {
+  return (data.oneTimeIncome || [])
+    .filter(i => i.date >= start && i.date <= end)
+    .reduce((s, i) => s + toBase(i.amount, i.currency || data.baseCurrency), 0);
 }
 
 function getLast6Months() {
@@ -425,6 +436,7 @@ function buildLayout() {
   ${showGroupModal ? buildGroupModal() : ''}
   ${showCardModal ? buildCardModal() : ''}
   ${showPayrollModal ? buildPayrollModal() : ''}
+  ${showIncomeModal ? buildIncomeModal() : ''}
   ${showCustomizeModal ? buildCustomizeModal() : ''}
   `;
 }
@@ -1031,6 +1043,43 @@ function buildIncome() {
             </div>`).join('')}
         </div>
       </div>`}
+
+    <!-- One-time / other income -->
+    <div class="card rounded-xl p-5 flex items-center gap-4 flex-wrap">
+      <span class="text-2xl">🎁</span>
+      <div class="flex-1 min-w-[200px]">
+        <p class="font-medium text-slate-200">Other / One-time Income</p>
+        <p class="text-xs text-slate-400">Non-recurring money: side jobs, gifts, refunds, bonuses… Counts in your Earned KPI for its date.</p>
+      </div>
+      <button onclick="openIncomeModal()" class="btn-primary text-white rounded-lg px-4 py-2 text-sm font-medium">+ Add income</button>
+    </div>
+    ${(() => {
+      const list = (data.oneTimeIncome || []).slice().sort((a, b) => b.date.localeCompare(a.date));
+      if (list.length === 0) return `<div class="card rounded-xl py-10 text-center text-slate-500 text-sm">No one-time income yet — tap “+ Add income” to log a side gig, gift, refund, etc.</div>`;
+      const total = list.reduce((s, i) => s + toBase(i.amount, i.currency || data.baseCurrency), 0);
+      return `
+      <div class="card rounded-xl overflow-hidden">
+        <div class="divide-y divide-slate-700/50">
+          ${list.map(i => `
+            <div class="flex items-center gap-4 px-5 py-3.5 hover:bg-slate-700/20 transition-colors">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0 bg-emerald-500/15">💵</div>
+              <div class="flex-1 min-w-0">
+                <p class="font-medium text-slate-200 truncate">${escapeHtml(i.source)}</p>
+                <p class="text-xs text-slate-500">${new Date(i.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}${i.note ? ' · '+escapeHtml(i.note) : ''}</p>
+              </div>
+              <p class="font-semibold text-emerald-400 flex-shrink-0">+${formatCurrency(toBase(i.amount, i.currency||data.baseCurrency))}${i.currency && i.currency!==data.baseCurrency ? ` <span class="text-xs text-slate-500">(${formatCurrency(i.amount, i.currency)})</span>` : ''}</p>
+              <div class="flex gap-1 flex-shrink-0">
+                <button onclick="openIncomeModal('${i.id}')" class="p-1.5 rounded-lg hover:bg-slate-600 text-slate-400 hover:text-white transition-colors text-sm">✏️</button>
+                <button onclick="deleteIncome('${i.id}')" class="p-1.5 rounded-lg hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-colors text-sm">🗑️</button>
+              </div>
+            </div>`).join('')}
+        </div>
+        <div class="px-5 py-3 border-t border-slate-700 flex justify-between items-center text-sm">
+          <span class="text-slate-400">Total one-time income</span>
+          <span class="font-bold text-emerald-400">${formatCurrency(total)}</span>
+        </div>
+      </div>`;
+    })()}
   </div>`;
 }
 
@@ -1403,6 +1452,52 @@ function buildPayrollModal() {
   </div>`;
 }
 
+function buildIncomeModal() {
+  const i = editingIncome;
+  const today = new Date().toISOString().slice(0, 10);
+  return `
+  <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
+    <div class="card rounded-2xl w-full max-w-sm p-6 space-y-4" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between">
+        <h2 class="font-semibold text-lg">${i ? 'Edit Income' : 'Add One-time Income'}</h2>
+        <button onclick="closeIncomeModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Source *</label>
+          <input id="inc_source" type="text" placeholder="e.g. Freelance gig, Gift, Refund" value="${i ? escapeHtml(i.source) : ''}"
+            class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-slate-400 uppercase tracking-wider">Amount *</label>
+            <div class="flex gap-1 mt-1">
+              <input id="inc_amount" type="number" min="0" step="0.01" placeholder="0.00" value="${i ? i.amount : ''}"
+                class="input-field w-full rounded-lg px-3 py-2.5" />
+              <select id="inc_currency" class="input-field rounded-lg px-1 py-2.5 w-20">
+                ${Object.keys(CURRENCIES).map(cc => `<option value="${cc}" ${(i?.currency||data.baseCurrency)===cc?'selected':''}>${cc}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="text-xs text-slate-400 uppercase tracking-wider">Date received *</label>
+            <input id="inc_date" type="date" value="${i?.date || today}" class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Note (optional)</label>
+          <input id="inc_note" type="text" placeholder="Any detail…" value="${i ? escapeHtml(i.note||'') : ''}"
+            class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
+        </div>
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button onclick="closeIncomeModal()" class="flex-1 bg-slate-700 hover:bg-slate-600 text-white rounded-lg py-2.5 text-sm font-medium transition-colors">Cancel</button>
+        <button onclick="saveIncome()" class="flex-1 btn-primary text-white rounded-lg py-2.5 text-sm font-medium transition-all">${i ? 'Save' : 'Add Income'}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
 function buildCustomizeModal() {
   const layout = getDashboardLayout();
   const dash = ensureDashboards();
@@ -1694,7 +1789,7 @@ function resetDashboardLayout() {
   saveDashboardLayout(defaultLayout());
   render();
 }
-function closeModal(event) { if (event.target === event.currentTarget) { showExpenseModal = showCategoryModal = showGroupModal = showCardModal = showPayrollModal = showCustomizeModal = false; editingExpense = editingCategory = editingGroup = editingCard = editingPayroll = null; render(); } }
+function closeModal(event) { if (event.target === event.currentTarget) { showExpenseModal = showCategoryModal = showGroupModal = showCardModal = showPayrollModal = showIncomeModal = showCustomizeModal = false; editingExpense = editingCategory = editingGroup = editingCard = editingPayroll = editingIncome = null; render(); } }
 
 function updateConvertPreview() {
   const el = document.getElementById('convertPreview');
@@ -1878,6 +1973,33 @@ function savePayroll() {
 function deletePayroll(id) {
   if (!confirm('Delete this payroll source?')) return;
   data.payrolls = data.payrolls.filter(p => p.id !== id);
+  saveData(data);
+  render();
+}
+
+function openIncomeModal(id) { editingIncome = id ? data.oneTimeIncome.find(i => i.id === id) : null; showIncomeModal = true; render(); }
+function closeIncomeModal() { showIncomeModal = false; editingIncome = null; render(); }
+
+function saveIncome() {
+  const source = document.getElementById('inc_source').value.trim();
+  const amount = parseFloat(document.getElementById('inc_amount').value);
+  const currency = document.getElementById('inc_currency').value;
+  const date = document.getElementById('inc_date').value;
+  const note = document.getElementById('inc_note').value.trim();
+  if (!source || !amount || amount <= 0 || !date) { alert('Please fill in source, amount and date.'); return; }
+  if (editingIncome) {
+    Object.assign(editingIncome, { source, amount, currency, date, note });
+  } else {
+    if (!Array.isArray(data.oneTimeIncome)) data.oneTimeIncome = [];
+    data.oneTimeIncome.push({ id: uuid(), source, amount, currency, date, note });
+  }
+  saveData(data);
+  closeIncomeModal();
+}
+
+function deleteIncome(id) {
+  if (!confirm('Delete this income entry?')) return;
+  data.oneTimeIncome = data.oneTimeIncome.filter(i => i.id !== id);
   saveData(data);
   render();
 }
