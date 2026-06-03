@@ -93,7 +93,7 @@ let cloudSaveTimer = null; // debounce handle for cloud writes
 let authBusy = false;     // login in progress
 
 function defaultData() {
-  return { expenses: [], categories: DEFAULT_CATEGORIES, income: 3000, groups: [], cards: [], payrolls: [], oneTimeIncome: [],
+  return { expenses: [], categories: DEFAULT_CATEGORIES, income: 3000, groups: [], cards: [], payrolls: [], oneTimeIncome: [], recurringExpenses: [],
            baseCurrency: 'CAD', rates: { base: 'USD', table: { ...FALLBACK_RATES }, fetchedAt: null } };
 }
 
@@ -107,6 +107,7 @@ function migrateData(parsed) {
   if (!parsed.cards) parsed.cards = [];
   if (!parsed.payrolls) parsed.payrolls = [];
   if (!parsed.oneTimeIncome) parsed.oneTimeIncome = [];
+  if (!parsed.recurringExpenses) parsed.recurringExpenses = [];
   if (!parsed.baseCurrency) parsed.baseCurrency = 'CAD';
   if (!parsed.rates) parsed.rates = { base: 'USD', table: { ...FALLBACK_RATES }, fetchedAt: null };
   parsed.expenses.forEach(e => {
@@ -144,6 +145,8 @@ let showPayrollModal = false;
 let editingPayroll = null;
 let showIncomeModal = false;
 let editingIncome = null;
+let showRecurringModal = false;
+let editingRecurring = null;
 let showCustomizeModal = false; // dashboard layout editor
 let showMenu = false; // "More" nav dropdown
 function emptyFilters() { return { search: '', categoryId: '', cardId: '', groupId: '', start: '', end: '', min: '', max: '' }; }
@@ -262,15 +265,39 @@ function payDatesInRange(p, from, to) {
     if (p.frequency === 'weekly') dt.setDate(dt.getDate() + 7);
     else if (p.frequency === 'biweekly') dt.setDate(dt.getDate() + 14);
     else if (p.frequency === 'monthly') dt.setMonth(dt.getMonth() + 1);
+    else if (p.frequency === 'yearly') dt.setFullYear(dt.getFullYear() + 1);
     else if (p.frequency === 'semimonthly') {
       // 1st and 15th-style: jump ~15 days alternating
       if (dt.getDate() < 15) dt.setDate(15); else { dt.setMonth(dt.getMonth() + 1); dt.setDate(1); }
     } else dt.setMonth(dt.getMonth() + 1);
   };
-  while (d < start && guard++ < 600) step(d);
+  while (d < start && guard++ < 2000) step(d);
   guard = 0;
-  while (d <= end && guard++ < 600) { dates.push(d.toISOString().slice(0,10)); step(d); }
+  while (d <= end && guard++ < 2000) { dates.push(d.toISOString().slice(0,10)); step(d); }
   return dates;
+}
+
+// Materialize recurring expenses into real expense entries up to today (no duplicates).
+function generateRecurringExpenses() {
+  if (!Array.isArray(data.recurringExpenses) || data.recurringExpenses.length === 0) return false;
+  const today = new Date().toISOString().slice(0, 10);
+  let added = false;
+  data.recurringExpenses.forEach(r => {
+    if (r.active === false || !r.startDate) return;
+    const seen = new Set(data.expenses.filter(e => e.recurringId === r.id).map(e => e.date));
+    payDatesInRange(r, r.startDate, today).forEach(date => {
+      if (seen.has(date)) return;
+      data.expenses.push({
+        id: uuid(), description: r.description, origAmount: r.amount,
+        currency: r.currency || data.baseCurrency, amount: toBase(r.amount, r.currency || data.baseCurrency),
+        date, categoryId: r.categoryId, cardId: r.cardId || null, groupId: r.groupId || null,
+        note: r.note || '', recurringId: r.id, auto: true, createdAt: new Date().toISOString(),
+      });
+      added = true;
+    });
+  });
+  if (added) saveData(data);
+  return added;
 }
 
 function nextPayday() {
@@ -415,13 +442,13 @@ function buildLayout() {
 
     <!-- Nav tabs -->
     <nav class="glass border-b border-slate-700/50 px-6 flex gap-1 py-2 sticky top-[73px] ${showMenu ? 'z-40' : 'z-10'}">
-      ${['dashboard','expenses'].map(t => `
+      ${['dashboard','expenses','income'].map(t => `
         <button onclick="switchTab('${t}')" class="px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${activeTab === t ? 'tab-active text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700/50'}">
           ${tabLabel(t)}
         </button>
       `).join('')}
       ${(() => {
-        const moreTabs = ['trips','cards','income','budgets'];
+        const moreTabs = ['trips','cards','budgets'];
         const moreActive = moreTabs.includes(activeTab);
         return `
         <div class="relative">
@@ -456,6 +483,7 @@ function buildLayout() {
   ${showCardModal ? buildCardModal() : ''}
   ${showPayrollModal ? buildPayrollModal() : ''}
   ${showIncomeModal ? buildIncomeModal() : ''}
+  ${showRecurringModal ? buildRecurringModal() : ''}
   ${showCustomizeModal ? buildCustomizeModal() : ''}
   `;
 }
@@ -714,24 +742,40 @@ function buildDashboard() {
   const body = getDashboardLayout().filter(w => w.visible).map(w => widgets[w.id] ? widgets[w.id]() : '').join('');
 
   return `
-  <div class="space-y-6">
-    ${buildDashboardSwitcher()}
-    ${buildPeriodBar()}
-    <div class="flex justify-end -mt-2 -mb-2">
-      <button onclick="openCustomizeModal()" class="text-xs text-slate-400 hover:text-white flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-slate-700/50 transition-colors">⚙️ Customize dashboard</button>
-    </div>
-    ${body || '<p class="text-center text-slate-500 py-10">All sections are hidden. Tap ⚙️ Customize dashboard to turn some on.</p>'}
+  <div class="space-y-4">
+    ${buildDashboardToolbar()}
+    ${body || '<p class="text-center text-slate-500 py-10">All sections are hidden. Tap ⚙️ to turn some on.</p>'}
   </div>`;
 }
 
-function buildDashboardSwitcher() {
+// Compact, tidy dashboard toolbar: view selector + actions on one row, period filter below.
+function buildDashboardToolbar() {
   ensureDashboards();
+  const r = periodRange();
+  const presets = [['thisMonth','Month'],['lastMonth','Last'],['last3','3M'],['ytd','YTD']];
   return `
-  <div class="flex items-center gap-2 flex-wrap">
-    ${data.dashboards.map(d => `
-      <button onclick="switchDashboard('${d.id}')" class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${d.id===data.activeDashboardId ? 'tab-active text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}">${escapeHtml(d.name)}</button>
-    `).join('')}
-    <button onclick="createDashboard()" class="px-3 py-1.5 rounded-lg text-sm font-medium bg-slate-800 text-slate-400 hover:text-white border border-dashed border-slate-600 transition-colors">＋ New</button>
+  <div class="card rounded-xl p-3 space-y-3">
+    <div class="flex items-center gap-2">
+      <div class="flex items-center gap-1.5 overflow-x-auto flex-1 scrollbar-thin">
+        ${data.dashboards.map(d => `
+          <button onclick="switchDashboard('${d.id}')" class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${d.id===data.activeDashboardId ? 'tab-active text-white' : 'bg-slate-700/60 text-slate-300 hover:bg-slate-600'}">${escapeHtml(d.name)}</button>
+        `).join('')}
+        <button onclick="createDashboard()" title="New dashboard" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-slate-800 text-slate-400 hover:text-white border border-dashed border-slate-600 transition-colors">＋</button>
+      </div>
+      <button onclick="openCustomizeModal()" title="Customize dashboard" class="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-slate-700/60 text-slate-300 hover:text-white hover:bg-slate-600 transition-colors">⚙️</button>
+    </div>
+    <div class="flex items-center gap-2 flex-wrap border-t border-slate-700/50 pt-3">
+      <div class="flex items-center gap-1">
+        ${presets.map(([id,lbl]) => `
+          <button onclick="setPreset('${id}')" class="px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${dashPeriod.preset===id ? 'tab-active text-white' : 'bg-slate-700/60 text-slate-300 hover:bg-slate-600'}">${lbl}</button>
+        `).join('')}
+      </div>
+      <div class="flex items-center gap-1.5 ml-auto">
+        <input type="date" id="rangeStart" value="${r.start}" onchange="applyCustomRange()" class="input-field rounded-lg px-2 py-1 text-xs" />
+        <span class="text-slate-500 text-xs">→</span>
+        <input type="date" id="rangeEnd" value="${r.end}" onchange="applyCustomRange()" class="input-field rounded-lg px-2 py-1 text-xs" />
+      </div>
+    </div>
   </div>`;
 }
 
@@ -833,7 +877,7 @@ function buildExpenses() {
           <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0" style="background:${cat.color}22">${cat.icon}</div>
           <div class="flex-1 min-w-0">
             <p class="font-medium text-slate-200 truncate">${e.description}</p>
-            <p class="text-xs text-slate-500">${cat.name} · ${new Date(e.date + 'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</p>
+            <p class="text-xs text-slate-500">${e.recurringId ? '🔁 ' : ''}${cat.name} · ${new Date(e.date + 'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</p>
           </div>
           ${(() => { const c = e.cardId ? getCardById(e.cardId) : null; return c ? `<span class="text-xs px-2 py-0.5 rounded-full flex-shrink-0 hidden sm:inline" style="background:${c.color}22;color:${c.color}">${c.icon} ${c.name}</span>` : ''; })()}
           ${(() => { const g = e.groupId ? getGroupById(e.groupId) : null; return g ? `<span class="text-xs px-2 py-0.5 rounded-full flex-shrink-0 hidden sm:inline" style="background:${g.color}22;color:${g.color}">${g.icon} ${g.name}</span>` : ''; })()}
@@ -1119,7 +1163,20 @@ function daysUntil(dateStr) {
 }
 
 function freqLabel(f) {
-  return { weekly:'Weekly', biweekly:'Bi-weekly (every 2 weeks)', semimonthly:'Semi-monthly (twice a month)', monthly:'Monthly' }[f] || f;
+  return { weekly:'Weekly', biweekly:'Bi-weekly (every 2 weeks)', semimonthly:'Semi-monthly (twice a month)', monthly:'Monthly', yearly:'Yearly' }[f] || f;
+}
+
+// Monthly-equivalent of a recurring expense (in base currency) — for the "fixed costs / month" total.
+function recurringMonthly(r) {
+  const amt = toBase(r.amount, r.currency || data.baseCurrency);
+  switch (r.frequency) {
+    case 'weekly':      return amt * 52 / 12;
+    case 'biweekly':    return amt * 26 / 12;
+    case 'semimonthly': return amt * 2;
+    case 'monthly':     return amt;
+    case 'yearly':      return amt / 12;
+    default:            return amt;
+  }
 }
 
 // ─── Budgets ──────────────────────────────────────────────────────────────────
@@ -1199,6 +1256,47 @@ function buildBudgets() {
         <span class="font-bold text-slate-200">${formatCurrency(data.categories.reduce((s,c)=>s+c.budget,0))}</span>
       </div>
     </div>
+
+    <!-- Recurring expenses -->
+    <div class="card rounded-xl p-5 flex items-center gap-4 flex-wrap">
+      <span class="text-2xl">🔁</span>
+      <div class="flex-1 min-w-[200px]">
+        <p class="font-medium text-slate-200">Recurring Expenses</p>
+        <p class="text-xs text-slate-400">Rent, subscriptions, monthly fees… auto-added as expenses on each due date.</p>
+      </div>
+      <button onclick="openRecurringModal()" class="btn-primary text-white rounded-lg px-4 py-2 text-sm font-medium">+ Add Recurring</button>
+    </div>
+    ${(() => {
+      const list = (data.recurringExpenses || []).slice().sort((a,b) => recurringMonthly(b) - recurringMonthly(a));
+      if (list.length === 0) return `<div class="card rounded-xl py-10 text-center text-slate-500 text-sm">No recurring expenses yet — add your rent, Netflix, gym, etc.</div>`;
+      const monthlyTotal = list.filter(r => r.active !== false).reduce((s, r) => s + recurringMonthly(r), 0);
+      return `
+      <div class="card rounded-xl overflow-hidden">
+        <div class="divide-y divide-slate-700/50">
+          ${list.map(r => { const cat = getCategoryById(r.categoryId); const paused = r.active === false; return `
+            <div class="flex items-center gap-4 px-5 py-3.5 hover:bg-slate-700/20 transition-colors ${paused?'opacity-50':''}">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0" style="background:${cat.color}22">${cat.icon}</div>
+              <div class="flex-1 min-w-0">
+                <p class="font-medium text-slate-200 truncate">${escapeHtml(r.description)}${paused?' <span class="text-xs text-slate-500">(paused)</span>':''}</p>
+                <p class="text-xs text-slate-500">${cat.name} · ${freqLabel(r.frequency).split(' (')[0]} · since ${new Date(r.startDate+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'})}</p>
+              </div>
+              <div class="text-right flex-shrink-0">
+                <p class="font-semibold text-red-400">${formatCurrency(toBase(r.amount, r.currency||data.baseCurrency))}</p>
+                <p class="text-xs text-slate-500">${formatCurrency(recurringMonthly(r))}/mo</p>
+              </div>
+              <div class="flex gap-1 flex-shrink-0">
+                <button onclick="toggleRecurring('${r.id}')" title="${paused?'Resume':'Pause'}" class="p-1.5 rounded-lg hover:bg-slate-600 text-slate-400 hover:text-white transition-colors text-sm">${paused?'▶️':'⏸️'}</button>
+                <button onclick="openRecurringModal('${r.id}')" class="p-1.5 rounded-lg hover:bg-slate-600 text-slate-400 hover:text-white transition-colors text-sm">✏️</button>
+                <button onclick="deleteRecurring('${r.id}')" class="p-1.5 rounded-lg hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-colors text-sm">🗑️</button>
+              </div>
+            </div>`; }).join('')}
+        </div>
+        <div class="px-5 py-3 border-t border-slate-700 flex justify-between items-center text-sm">
+          <span class="text-slate-400">Fixed costs / month</span>
+          <span class="font-bold text-red-400">${formatCurrency(monthlyTotal)}</span>
+        </div>
+      </div>`;
+    })()}
 
     <!-- Danger zone -->
     <div class="card rounded-xl p-5 border border-red-500/30">
@@ -1523,6 +1621,72 @@ function buildIncomeModal() {
   </div>`;
 }
 
+function buildRecurringModal() {
+  const r = editingRecurring;
+  const today = new Date().toISOString().slice(0, 10);
+  return `
+  <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
+    <div class="card rounded-2xl w-full max-w-md p-6 space-y-4 max-h-[90vh] overflow-y-auto scrollbar-thin" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between">
+        <h2 class="font-semibold text-lg">${r ? 'Edit Recurring' : 'New Recurring Expense'}</h2>
+        <button onclick="closeRecurringModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Description *</label>
+          <input id="rec_desc" type="text" placeholder="e.g. Rent, Netflix, Gym" value="${r ? escapeHtml(r.description) : ''}"
+            class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-slate-400 uppercase tracking-wider">Amount *</label>
+            <div class="flex gap-1 mt-1">
+              <input id="rec_amount" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00" value="${r ? r.amount : ''}"
+                class="input-field w-full rounded-lg px-3 py-2.5" />
+              <select id="rec_currency" class="input-field rounded-lg px-1 py-2.5 w-20">
+                ${Object.keys(CURRENCIES).map(cc => `<option value="${cc}" ${(r?.currency||data.baseCurrency)===cc?'selected':''}>${cc}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="text-xs text-slate-400 uppercase tracking-wider">Frequency *</label>
+            <select id="rec_freq" class="input-field w-full rounded-lg px-3 py-2.5 mt-1">
+              ${['weekly','biweekly','semimonthly','monthly','yearly'].map(f => `<option value="${f}" ${(r?.frequency||'monthly')===f?'selected':''}>${freqLabel(f).split(' (')[0]}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Category *</label>
+          <select id="rec_cat" class="input-field w-full rounded-lg px-3 py-2.5 mt-1">
+            ${data.categories.map(c => `<option value="${c.id}" ${r?.categoryId===c.id?'selected':''}>${c.icon} ${c.name}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">First due date *</label>
+          <input id="rec_start" type="date" value="${r?.startDate || today}" class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Paid with (card)</label>
+          <select id="rec_card" class="input-field w-full rounded-lg px-3 py-2.5 mt-1">
+            <option value="">— Not specified —</option>
+            ${data.cards.map(c => `<option value="${c.id}" ${r?.cardId===c.id?'selected':''}>${c.icon} ${c.name}${c.last4?' ••'+c.last4:''}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Note (optional)</label>
+          <input id="rec_note" type="text" placeholder="Any detail…" value="${r ? escapeHtml(r.note||'') : ''}"
+            class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
+        </div>
+        <p class="text-xs text-slate-500">💡 Past due dates since the first date are added automatically. Future ones appear as their date arrives.</p>
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button onclick="closeRecurringModal()" class="flex-1 bg-slate-700 hover:bg-slate-600 text-white rounded-lg py-2.5 text-sm font-medium transition-colors">Cancel</button>
+        <button onclick="saveRecurring()" class="flex-1 btn-primary text-white rounded-lg py-2.5 text-sm font-medium transition-all">${r ? 'Save' : 'Add Recurring'}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
 function buildCustomizeModal() {
   const layout = getDashboardLayout();
   const dash = ensureDashboards();
@@ -1825,7 +1989,7 @@ function resetDashboardLayout() {
   saveDashboardLayout(defaultLayout());
   render();
 }
-function closeModal(event) { if (event.target === event.currentTarget) { showExpenseModal = showCategoryModal = showGroupModal = showCardModal = showPayrollModal = showIncomeModal = showCustomizeModal = false; editingExpense = editingCategory = editingGroup = editingCard = editingPayroll = editingIncome = null; render(); } }
+function closeModal(event) { if (event.target === event.currentTarget) { showExpenseModal = showCategoryModal = showGroupModal = showCardModal = showPayrollModal = showIncomeModal = showRecurringModal = showCustomizeModal = false; editingExpense = editingCategory = editingGroup = editingCard = editingPayroll = editingIncome = editingRecurring = null; render(); } }
 
 function updateConvertPreview() {
   const el = document.getElementById('convertPreview');
@@ -2040,6 +2204,51 @@ function deleteIncome(id) {
   render();
 }
 
+// ─── Recurring expenses ─────────────────────────────────────────────────────
+function openRecurringModal(id) { editingRecurring = id ? data.recurringExpenses.find(r => r.id === id) : null; showRecurringModal = true; render(); }
+function closeRecurringModal() { showRecurringModal = false; editingRecurring = null; render(); }
+
+function saveRecurring() {
+  const description = document.getElementById('rec_desc').value.trim();
+  const amount = parseFloat(document.getElementById('rec_amount').value);
+  const currency = document.getElementById('rec_currency').value;
+  const frequency = document.getElementById('rec_freq').value;
+  const categoryId = document.getElementById('rec_cat').value;
+  const startDate = document.getElementById('rec_start').value;
+  const cardId = document.getElementById('rec_card').value || null;
+  const note = document.getElementById('rec_note').value.trim();
+  if (!description || !amount || amount <= 0 || !startDate || !categoryId) { alert('Please fill in description, amount, category and date.'); return; }
+  if (editingRecurring) {
+    Object.assign(editingRecurring, { description, amount, currency, frequency, categoryId, startDate, cardId, note });
+  } else {
+    if (!Array.isArray(data.recurringExpenses)) data.recurringExpenses = [];
+    data.recurringExpenses.push({ id: uuid(), description, amount, currency, frequency, categoryId, startDate, cardId, note, active: true });
+  }
+  saveData(data);
+  generateRecurringExpenses(); // materialize any due occurrences now
+  closeRecurringModal();
+}
+
+function toggleRecurring(id) {
+  const r = data.recurringExpenses.find(x => x.id === id);
+  if (!r) return;
+  r.active = r.active === false ? true : false;
+  saveData(data);
+  if (r.active) generateRecurringExpenses();
+  render();
+}
+
+function deleteRecurring(id) {
+  const generated = data.expenses.filter(e => e.recurringId === id).length;
+  const msg = generated > 0
+    ? `Delete this recurring rule? The ${generated} expense${generated===1?'':'s'} it already created will be KEPT. (Stops future ones.)`
+    : 'Delete this recurring rule?';
+  if (!confirm(msg)) return;
+  data.recurringExpenses = data.recurringExpenses.filter(r => r.id !== id);
+  saveData(data);
+  render();
+}
+
 // ─── Backup: export / import ────────────────────────────────────────────────
 function exportData() {
   const payload = { app: 'Money Flies', version: 1, exportedAt: new Date().toISOString(), data };
@@ -2136,6 +2345,7 @@ async function doLogin() {
     if (error) { errEl.textContent = error.message; return; }
     currentUser = res.user;
     await loadFromCloud();
+    generateRecurringExpenses();
     applyActiveDashboardPeriod();
     renderRoot();
   } catch (err) {
@@ -2204,6 +2414,7 @@ async function boot() {
     // Supabase unavailable (e.g. offline first load) → run local-only.
     currentUser = { id: 'local', local: true };
   }
+  if (currentUser) generateRecurringExpenses(); // fill in due rent/subscriptions up to today
   applyActiveDashboardPeriod();
   renderRoot();
   refreshRates(); // fetch live FX rates in the background, then re-render
