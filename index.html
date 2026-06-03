@@ -273,13 +273,17 @@ function nextPayday() {
   return best;
 }
 
+let _monthTotalsCache = {}; // cleared at the start of every render()
 function getMonthTotals(month) {
+  if (_monthTotalsCache[month]) return _monthTotalsCache[month];
   const exps = getMonthExpenses(month);
   const total = exps.reduce((s, e) => s + expenseBase(e), 0);
   const byCategory = {};
   data.categories.forEach(c => { byCategory[c.id] = 0; });
   exps.forEach(e => { byCategory[e.categoryId] = (byCategory[e.categoryId] || 0) + expenseBase(e); });
-  return { total, byCategory };
+  const result = { total, byCategory };
+  _monthTotalsCache[month] = result;
+  return result;
 }
 
 // ─── Period filter (dashboard) ──────────────────────────────────────────────
@@ -363,10 +367,12 @@ function monthLabel(m) {
 
 // ─── Render ───────────────────────────────────────────────────────────────────
 function render() {
+  _monthTotalsCache = {}; // fresh per render (data/currency may have changed)
   const app = document.getElementById('app');
   app.innerHTML = buildLayout();
   attachEvents();
-  renderCharts();
+  // Defer charts one frame so the UI paints instantly, then charts fill in.
+  requestAnimationFrame(renderCharts);
 }
 
 function buildLayout() {
@@ -763,7 +769,7 @@ function buildExpenses() {
         ${activeCount ? `<button onclick="clearFilters()" class="text-xs text-slate-400 hover:text-white">Clear all</button>` : ''}
       </div>
       <input id="filterSearch" type="text" placeholder="Search description or note…" value="${escapeHtml(f.search)}"
-        oninput="setFilter('search', this.value)" class="input-field w-full rounded-lg px-3 py-2 text-sm" />
+        oninput="setSearchFilter(this.value)" class="input-field w-full rounded-lg px-3 py-2 text-sm" />
       <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
         <select onchange="setFilter('categoryId', this.value)" class="input-field rounded-lg px-2 py-2 text-sm">
           <option value="">All categories</option>
@@ -1739,7 +1745,18 @@ function viewGroup(id) { expenseFilters = { ...emptyFilters(), groupId: id }; ac
 function setFilter(key, val) {
   expenseFilters[key] = val;
   render();
-  if (key === 'search') { const el = document.getElementById('filterSearch'); if (el) { el.focus(); const v = el.value; el.value = ''; el.value = v; } }
+}
+
+// Search updates the list shortly after you stop typing (no re-render per keystroke = smooth).
+let _searchDebounce = null;
+function setSearchFilter(val) {
+  expenseFilters.search = val;
+  clearTimeout(_searchDebounce);
+  _searchDebounce = setTimeout(() => {
+    render();
+    const el = document.getElementById('filterSearch');
+    if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+  }, 250);
 }
 function clearFilters() { expenseFilters = emptyFilters(); render(); }
 
