@@ -30,11 +30,12 @@
   .glass { background: rgba(255,255,255,0.05); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.08); }
   .card { background: #1e293b; border: 1px solid #334155; }
   .input-field { background: #0f172a; border: 1px solid #334155; color: #f1f5f9; }
-  .input-field:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,0.2); }
-  .btn-primary { background: linear-gradient(135deg, #6366f1, #8b5cf6); }
-  .btn-primary:hover { background: linear-gradient(135deg, #4f46e5, #7c3aed); }
+  :root { --accent: #6366f1; --accent2: #8b5cf6; }
+  .input-field:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }
+  .btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); }
+  .btn-primary:hover { filter: brightness(1.08); }
   .btn-danger:hover { background: #ef4444; }
-  .tab-active { background: linear-gradient(135deg, #6366f1, #8b5cf6); }
+  .tab-active { background: linear-gradient(135deg, var(--accent), var(--accent2)); }
   .progress-bar { background: #1e293b; border-radius: 9999px; overflow: hidden; }
   .scrollbar-thin::-webkit-scrollbar { width: 4px; }
   .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
@@ -119,6 +120,24 @@ const CURRENCIES = {
 };
 const FALLBACK_RATES = { USD:1, EUR:0.92, GBP:0.79, JPY:157, CAD:1.36, AUD:1.52, CHF:0.88, CNY:7.24, INR:83.3, MXN:18.6, BRL:5.43 };
 
+// Accent themes (per-user, saved to their account).
+const ACCENT_PRESETS = [
+  { id: 'indigo',  name: 'Indigo',   c1: '#6366f1', c2: '#8b5cf6' },
+  { id: 'ocean',   name: 'Ocean',    c1: '#3b82f6', c2: '#06b6d4' },
+  { id: 'emerald', name: 'Emerald',  c1: '#10b981', c2: '#22c55e' },
+  { id: 'sunset',  name: 'Sunset',   c1: '#f59e0b', c2: '#f97316' },
+  { id: 'rose',    name: 'Rose',     c1: '#f43f5e', c2: '#ec4899' },
+  { id: 'grape',   name: 'Grape',    c1: '#a855f7', c2: '#d946ef' },
+  { id: 'teal',    name: 'Teal',     c1: '#14b8a6', c2: '#0ea5e9' },
+  { id: 'graphite',name: 'Graphite', c1: '#64748b', c2: '#94a3b8' },
+];
+function applyTheme() {
+  const p = ACCENT_PRESETS.find(x => x.id === (data && data.accent)) || ACCENT_PRESETS[0];
+  document.documentElement.style.setProperty('--accent', p.c1);
+  document.documentElement.style.setProperty('--accent2', p.c2);
+  const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', '#0f172a');
+}
+
 // ─── Supabase (auth + cloud sync) ───────────────────────────────────────────
 const SUPABASE_URL = 'https://fzcaajhlpvkpqrhfwwdd.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ6Y2FhamhscHZrcHFyaGZ3d2RkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0NjAyOTcsImV4cCI6MjA5NjAzNjI5N30.Y_lDdhzC65w0xcCh15dRF-N1Ovxnv1vO7vfpqs-PzPw';
@@ -130,7 +149,7 @@ let authBusy = false;     // login in progress
 
 function defaultData() {
   return { expenses: [], categories: DEFAULT_CATEGORIES, income: 3000, groups: [], cards: [], payrolls: [], oneTimeIncome: [], recurringExpenses: [],
-           baseCurrency: 'CAD', rates: { base: 'USD', table: { ...FALLBACK_RATES }, fetchedAt: null } };
+           accent: 'indigo', baseCurrency: 'CAD', rates: { base: 'USD', table: { ...FALLBACK_RATES }, fetchedAt: null } };
 }
 
 // Apply forward-compatible migrations to a loaded data object (from cache or cloud).
@@ -144,6 +163,7 @@ function migrateData(parsed) {
   if (!parsed.payrolls) parsed.payrolls = [];
   if (!parsed.oneTimeIncome) parsed.oneTimeIncome = [];
   if (!parsed.recurringExpenses) parsed.recurringExpenses = [];
+  if (!parsed.accent) parsed.accent = 'indigo';
   if (!parsed.baseCurrency) parsed.baseCurrency = 'CAD';
   if (!parsed.rates) parsed.rates = { base: 'USD', table: { ...FALLBACK_RATES }, fetchedAt: null };
   parsed.expenses.forEach(e => {
@@ -184,6 +204,7 @@ let editingIncome = null;
 let showRecurringModal = false;
 let editingRecurring = null;
 let showCustomizeModal = false; // dashboard layout editor
+let showThemeModal = false; // accent color picker
 let showMenu = false; // "More" nav dropdown
 let showAccountMenu = false; // header account/data dropdown
 let adminData = null, adminLoading = false, adminError = null; // admin view cache
@@ -575,7 +596,8 @@ function buildLayout() {
           ${showAccountMenu ? `
             <div class="absolute right-0 mt-1 w-56 card rounded-xl shadow-xl border border-slate-600 py-1 z-40">
               ${(currentUser && currentUser.email) ? `<div class="px-4 py-2 text-xs text-slate-500 border-b border-slate-700/50 truncate">Signed in as<br><span class="text-slate-300">${escapeHtml(currentUser.email)}</span></div>` : ''}
-              <button onclick="exportData(); closeAccountMenu()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">⬇️ Export backup</button>
+              <button onclick="closeAccountMenu(); openThemeModal()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">🎨 Appearance</button>
+              <button onclick="exportData(); closeAccountMenu()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors border-t border-slate-700/50">⬇️ Export backup</button>
               <button onclick="closeAccountMenu(); document.getElementById('importFile').click()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">⬆️ Import backup</button>
               ${(currentUser && !currentUser.local) ? `<button onclick="logout()" class="w-full text-left px-4 py-2.5 text-sm text-red-300 hover:bg-red-500/10 border-t border-slate-700/50 transition-colors">⎋ Sign out</button>` : ''}
             </div>` : ''}
@@ -628,6 +650,7 @@ function buildLayout() {
   ${showIncomeModal ? buildIncomeModal() : ''}
   ${showRecurringModal ? buildRecurringModal() : ''}
   ${showCustomizeModal ? buildCustomizeModal() : ''}
+  ${showThemeModal ? buildThemeModal() : ''}
   `;
 }
 
@@ -2065,6 +2088,29 @@ function buildCustomizeModal() {
   </div>`;
 }
 
+function buildThemeModal() {
+  const cur = (data.accent) || 'indigo';
+  return `
+  <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
+    <div class="card rounded-2xl w-full max-w-sm p-6 space-y-4" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between">
+        <h2 class="font-semibold text-lg">🎨 Appearance</h2>
+        <button onclick="closeThemeModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+      </div>
+      <p class="text-xs text-slate-400 -mt-2">Pick your accent color. Saved to your account.</p>
+      <div class="grid grid-cols-2 gap-3">
+        ${ACCENT_PRESETS.map(p => `
+          <button onclick="setAccent('${p.id}')" class="flex items-center gap-3 rounded-xl p-3 border transition-colors ${cur===p.id ? 'border-white/70 bg-slate-700/50' : 'border-slate-700 hover:bg-slate-700/40'}">
+            <span class="w-8 h-8 rounded-full flex-shrink-0" style="background:linear-gradient(135deg,${p.c1},${p.c2})"></span>
+            <span class="text-sm text-slate-200">${p.name}</span>
+            ${cur===p.id ? '<span class="ml-auto text-white">✓</span>' : ''}
+          </button>`).join('')}
+      </div>
+      <button onclick="closeThemeModal()" class="w-full btn-primary text-white rounded-lg py-2.5 text-sm font-medium transition-all">Done</button>
+    </div>
+  </div>`;
+}
+
 // ─── Chart rendering ──────────────────────────────────────────────────────────
 function renderCharts() {
   destroyCharts();
@@ -2402,6 +2448,9 @@ function closeCardModal() { showCardModal = false; editingCard = null; render();
 function closePayrollModal() { showPayrollModal = false; editingPayroll = null; render(); }
 function openCustomizeModal() { showCustomizeModal = true; showMenu = false; render(); }
 function closeCustomizeModal() { showCustomizeModal = false; render(); }
+function openThemeModal() { showThemeModal = true; render(); }
+function closeThemeModal() { showThemeModal = false; render(); }
+function setAccent(id) { data.accent = id; saveData(data); applyTheme(); showToast('Theme updated ✓'); render(); }
 function saveDashboardLayout(layout) { const d = ensureDashboards(); d.layout = layout; saveData(data); }
 function toggleWidget(id) {
   const layout = getDashboardLayout();
@@ -2448,7 +2497,7 @@ function resetDashboardLayout() {
   saveDashboardLayout(defaultLayout());
   render();
 }
-function closeModal(event) { if (event.target === event.currentTarget) { showExpenseModal = showCategoryModal = showGroupModal = showCardModal = showPayrollModal = showIncomeModal = showRecurringModal = showCustomizeModal = false; editingExpense = editingCategory = editingGroup = editingCard = editingPayroll = editingIncome = editingRecurring = null; render(); } }
+function closeModal(event) { if (event.target === event.currentTarget) { showExpenseModal = showCategoryModal = showGroupModal = showCardModal = showPayrollModal = showIncomeModal = showRecurringModal = showCustomizeModal = showThemeModal = false; editingExpense = editingCategory = editingGroup = editingCard = editingPayroll = editingIncome = editingRecurring = null; render(); } }
 
 function updateConvertPreview() {
   const el = document.getElementById('convertPreview');
@@ -2827,6 +2876,8 @@ async function doLogin() {
     await loadFromCloud();
     generateRecurringExpenses();
     applyActiveDashboardPeriod();
+    applyTheme();
+    _animate = true;
     renderRoot();
   } catch (err) {
     errEl.textContent = 'Could not sign in (network?). Try again.';
@@ -2899,6 +2950,7 @@ async function boot() {
   }
   if (currentUser) generateRecurringExpenses(); // fill in due rent/subscriptions up to today
   applyActiveDashboardPeriod();
+  applyTheme();
   _animate = true;
   renderRoot();
   refreshRates(); // fetch live FX rates in the background, then re-render
