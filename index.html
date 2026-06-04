@@ -812,12 +812,13 @@ function buildDashboard() {
     donut: () => `
       <div class="card rounded-xl p-5">
         <h3 class="font-semibold text-slate-200 mb-4">Category Breakdown — ${label}</h3>
+        ${total === 0 ? emptyState('🍩', 'Nothing to show yet', 'No spending in this period. Add an expense to see your category breakdown.') : `
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
           <div class="relative mx-auto w-full" style="max-width:240px;height:240px;">
             <canvas id="donutChart"></canvas>
           </div>
           <div id="donutLegend" class="space-y-1 text-xs max-h-56 overflow-y-auto scrollbar-thin"></div>
-        </div>
+        </div>`}
       </div>`,
 
     budgetBars: () => `
@@ -885,11 +886,13 @@ function buildDashboard() {
     topCats: () => {
       const months6 = getLast6Months();
       const top = data.categories.map(c => ({ cat: c, total: months6.reduce((s, m) => s + (getMonthTotals(m).byCategory[c.id] || 0), 0) }))
+        .filter(x => x.total > 0)
         .sort((a, b) => b.total - a.total).slice(0, 5);
       const maxVal = (top[0] && top[0].total) || 1;
       return `
       <div class="card rounded-xl p-5">
         <h3 class="font-semibold text-slate-200 mb-4">Top Categories (6 months)</h3>
+        ${top.length === 0 ? emptyState('🍔', 'No spending yet', 'Add a few expenses and your top categories will show up here.') : `
         <div class="space-y-3">
           ${top.map((item, i) => `
             <div class="flex items-center gap-3">
@@ -903,7 +906,7 @@ function buildDashboard() {
                 <div class="progress-bar h-2"><div style="width:${(item.total/maxVal)*100}%;background:${item.cat.color}" class="h-full rounded-full"></div></div>
               </div>
             </div>`).join('')}
-        </div>
+        </div>`}
       </div>`;
     },
 
@@ -987,6 +990,14 @@ function buildDashboardToolbar() {
         <button onclick="openCustomizeModal()" title="Customize dashboard" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-slate-700/60 text-slate-300 hover:text-white hover:bg-slate-600 transition-colors">⚙️</button>
       </div>
     </div>
+  </div>`;
+}
+
+function emptyState(icon, title, sub) {
+  return `<div class="py-10 text-center">
+    <div class="text-3xl mb-2 opacity-70">${icon}</div>
+    <p class="text-slate-300 text-sm font-medium">${title}</p>
+    ${sub ? `<p class="text-slate-500 text-xs mt-1 max-w-xs mx-auto">${sub}</p>` : ''}
   </div>`;
 }
 
