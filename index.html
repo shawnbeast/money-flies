@@ -2121,12 +2121,36 @@ function renderCharts() {
 function renderCardChart() {
   const ctx = document.getElementById('cardChart');
   if (!ctx || data.cards.length === 0) return;
-  const labels = data.cards.map(c => c.name);
+  const labels = data.cards.map(c => `${c.icon} ${c.name}`);
   const totals = data.cards.map(c => getCardStats(c.id, activeMonth).total);
+  const sym = (CURRENCIES[data.baseCurrency] || {}).symbol || '';
+  // draw the $ amount at the end of each bar
+  const valueLabels = {
+    id: 'cardValueLabels',
+    afterDatasetsDraw(chart) {
+      const { ctx: cx } = chart;
+      const meta = chart.getDatasetMeta(0);
+      cx.save(); cx.fillStyle = '#e2e8f0'; cx.font = '600 12px Inter, sans-serif'; cx.textBaseline = 'middle';
+      meta.data.forEach((bar, i) => { cx.fillText(formatCurrency(totals[i]), bar.x + 8, bar.y); });
+      cx.restore();
+    }
+  };
   chartInstances.card = new Chart(ctx, {
     type: 'bar',
-    data: { labels, datasets: [{ label: 'Spent', data: totals, backgroundColor: data.cards.map(c => c.color), borderRadius: 6 }] },
-    options: { ...chartOpts(), plugins: { ...chartOpts().plugins, legend: { display: false } }, indexAxis: 'y' }
+    data: { labels, datasets: [{ label: 'Spent', data: totals, backgroundColor: data.cards.map(c => c.color), borderRadius: 6, maxBarThickness: 38 }] },
+    options: {
+      responsive: true, maintainAspectRatio: true, indexAxis: 'y',
+      layout: { padding: { right: 64 } },
+      plugins: {
+        legend: { display: false },
+        tooltip: { backgroundColor: '#1e293b', borderColor: '#334155', borderWidth: 1, titleColor: '#f1f5f9', bodyColor: '#94a3b8', callbacks: { label: c => ' ' + formatCurrency(c.parsed.x) } }
+      },
+      scales: {
+        x: { ticks: { color: '#64748b', callback: v => sym + v.toLocaleString() }, grid: { color: '#1e293b' } },
+        y: { ticks: { color: '#cbd5e1', font: { size: 13 } }, grid: { display: false } }
+      }
+    },
+    plugins: [valueLabels]
   });
 }
 
