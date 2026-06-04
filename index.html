@@ -19,6 +19,7 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <style>
   html, body { background: #0f172a; font-family: 'Inter', system-ui, sans-serif; max-width: 100%; overflow-x: hidden; -webkit-font-smoothing: antialiased; }
   /* aligned numerals for clean money columns */
@@ -597,7 +598,8 @@ function buildLayout() {
             <div class="absolute right-0 mt-1 w-56 card rounded-xl shadow-xl border border-slate-600 py-1 z-40">
               ${(currentUser && currentUser.email) ? `<div class="px-4 py-2 text-xs text-slate-500 border-b border-slate-700/50 truncate">Signed in as<br><span class="text-slate-300">${escapeHtml(currentUser.email)}</span></div>` : ''}
               <button onclick="closeAccountMenu(); openThemeModal()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">🎨 Appearance</button>
-              <button onclick="exportData(); closeAccountMenu()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors border-t border-slate-700/50">⬇️ Export backup</button>
+              <button onclick="exportExcel(); closeAccountMenu()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors border-t border-slate-700/50">📊 Export to Excel</button>
+              <button onclick="exportData(); closeAccountMenu()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">⬇️ Backup (.json)</button>
               <button onclick="closeAccountMenu(); document.getElementById('importFile').click()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">⬆️ Import backup</button>
               ${(currentUser && !currentUser.local) ? `<button onclick="logout()" class="w-full text-left px-4 py-2.5 text-sm text-red-300 hover:bg-red-500/10 border-t border-slate-700/50 transition-colors">⎋ Sign out</button>` : ''}
             </div>` : ''}
@@ -2830,6 +2832,44 @@ function exportData() {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+function exportExcel() {
+  if (!window.XLSX) { alert('Excel library not loaded yet — check your connection and try again.'); return; }
+  const XLSX = window.XLSX;
+  const base = data.baseCurrency;
+  const r2 = n => Math.round((Number(n) || 0) * 100) / 100;
+
+  const expRows = data.expenses.slice().sort((a, b) => a.date.localeCompare(b.date)).map(e => ({
+    Date: e.date,
+    Description: e.description,
+    Category: (getCategoryById(e.categoryId) || {}).name || '',
+    Card: e.cardId ? ((getCardById(e.cardId) || {}).name || '') : '',
+    Trip: e.groupId ? ((getGroupById(e.groupId) || {}).name || '') : '',
+    Currency: e.currency || base,
+    'Original amount': r2(e.origAmount != null ? e.origAmount : e.amount),
+    ['Amount (' + base + ')']: r2(expenseBase(e)),
+    Recurring: e.recurringId ? 'Yes' : '',
+    Note: e.note || '',
+  }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(expRows.length ? expRows : [{ Date: '', Description: 'No expenses yet' }]), 'Expenses');
+
+  const incRows = (data.oneTimeIncome || []).slice().sort((a, b) => a.date.localeCompare(b.date)).map(i => ({
+    Date: i.date, Source: i.source, Currency: i.currency || base,
+    Amount: r2(i.amount), ['Amount (' + base + ')']: r2(toBase(i.amount, i.currency || base)), Note: i.note || '',
+  }));
+  if (incRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(incRows), 'Other income');
+
+  const recRows = (data.recurringExpenses || []).map(rr => ({
+    Description: rr.description, Category: (getCategoryById(rr.categoryId) || {}).name || '',
+    Frequency: freqLabel(rr.frequency).split(' (')[0], Currency: rr.currency || base,
+    Amount: r2(rr.amount), ['Per month (' + base + ')']: r2(recurringMonthly(rr)), Active: rr.active === false ? 'Paused' : 'Yes',
+  }));
+  if (recRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(recRows), 'Recurring');
+
+  XLSX.writeFile(wb, 'money-flies-' + new Date().toISOString().slice(0, 10) + '.xlsx');
+  showToast('Excel exported ✓');
 }
 
 function importData(event) {
