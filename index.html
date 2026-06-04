@@ -226,8 +226,25 @@ function expenseBase(e) {
   return toBase(e.origAmount != null ? e.origAmount : e.amount, e.currency || data.baseCurrency);
 }
 
+// Active dashboard scope (only applied while viewing the Dashboard tab).
+function currentScope() {
+  if (activeTab !== 'dashboard') return null;
+  const d = ensureDashboards();
+  const s = d.scope;
+  if (s && (s.groupId || s.cardId || s.categoryId)) return s;
+  return null;
+}
+function applyScope(list) {
+  const s = currentScope();
+  if (!s) return list;
+  return list.filter(e =>
+    (!s.groupId || e.groupId === s.groupId) &&
+    (!s.cardId || e.cardId === s.cardId) &&
+    (!s.categoryId || e.categoryId === s.categoryId));
+}
+
 function getMonthExpenses(month) {
-  return data.expenses.filter(e => e.date.startsWith(month));
+  return applyScope(data.expenses.filter(e => e.date.startsWith(month)));
 }
 
 function getCategoryById(id) {
@@ -379,7 +396,7 @@ function periodLabel() {
 }
 
 function expensesInRange(start, end) {
-  return data.expenses.filter(e => e.date >= start && e.date <= end);
+  return applyScope(data.expenses.filter(e => e.date >= start && e.date <= end));
 }
 
 function rangeTotals(start, end) {
@@ -571,6 +588,7 @@ function buildPeriodBar() {
 
 // Available dashboard widgets (order here = default order).
 const DASHBOARD_WIDGETS = [
+  { id: 'customKpis',    label: 'My custom KPI tiles' },
   { id: 'kpis',          label: 'KPI cards (spent, earned, net…)' },
   { id: 'earnedVsSpent', label: 'Earned vs Spent bars' },
   { id: 'trend',         label: '6-Month Trend chart' },
@@ -599,6 +617,12 @@ function ensureDashboards() {
   if (!data.activeDashboardId || !data.dashboards.find(d => d.id === data.activeDashboardId)) {
     data.activeDashboardId = data.dashboards[0].id;
   }
+  // normalize newer fields
+  data.dashboards.forEach(d => {
+    if (!d.scope) d.scope = { groupId: '', cardId: '', categoryId: '' };
+    if (!Array.isArray(d.customKpis)) d.customKpis = [];
+    if (!d.icon) d.icon = '📊';
+  });
   return data.dashboards.find(d => d.id === data.activeDashboardId);
 }
 
@@ -628,6 +652,23 @@ function buildDashboard() {
 
   // Each widget is a function returning its HTML block (or '' to render nothing).
   const widgets = {
+    customKpis: () => {
+      const dash = ensureDashboards();
+      const tiles = dash.customKpis || [];
+      if (tiles.length === 0) return '';
+      const periodExps = expensesInRange(start, end);
+      return `
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          ${tiles.map(t => {
+            const matches = periodExps.filter(e => (!t.categoryId || e.categoryId === t.categoryId) && (!t.cardId || e.cardId === t.cardId));
+            const val = t.metric === 'count' ? matches.length : matches.reduce((s, e) => s + expenseBase(e), 0);
+            const display = t.metric === 'count' ? String(val) : formatCurrency(val);
+            const cat = t.categoryId ? getCategoryById(t.categoryId) : null;
+            const sub = [cat ? cat.name : null, t.cardId ? (getCardById(t.cardId)||{}).name : null, t.metric === 'count' ? 'transactions' : 'spent'].filter(Boolean).join(' · ');
+            return kpiCard(t.label || 'Custom', display, sub, (cat && cat.color) || '#8b5cf6', (cat && cat.icon) || '⭐');
+          }).join('')}
+        </div>`;
+    },
     kpis: () => `
       <div class="grid grid-cols-2 lg:grid-cols-3 gap-4">
         ${kpiCard('Total Spent', formatCurrency(total), label, '#f59e0b', '💳',
@@ -816,21 +857,32 @@ function buildDashboard() {
 }
 
 // Compact, tidy dashboard toolbar: view selector + actions on one row, period filter below.
+function scopeLabel(s) {
+  if (!s) return '';
+  const parts = [];
+  if (s.groupId) { const g = getGroupById(s.groupId); if (g) parts.push(g.icon + ' ' + g.name); }
+  if (s.cardId) { const c = getCardById(s.cardId); if (c) parts.push(c.icon + ' ' + c.name); }
+  if (s.categoryId) { const c = getCategoryById(s.categoryId); parts.push(c.icon + ' ' + c.name); }
+  return parts.join(' · ');
+}
+
 function buildDashboardToolbar() {
-  ensureDashboards();
+  const dash = ensureDashboards();
   const r = periodRange();
   const presets = [['thisMonth','Month'],['lastMonth','Last'],['last3','3M'],['ytd','YTD']];
+  const scoped = scopeLabel(dash.scope);
   return `
   <div class="card rounded-xl p-3 space-y-3">
     <div class="flex items-center gap-2">
       <div class="flex items-center gap-1.5 overflow-x-auto flex-1 scrollbar-thin">
         ${data.dashboards.map(d => `
-          <button onclick="switchDashboard('${d.id}')" class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${d.id===data.activeDashboardId ? 'tab-active text-white' : 'bg-slate-700/60 text-slate-300 hover:bg-slate-600'}">${escapeHtml(d.name)}</button>
+          <button onclick="switchDashboard('${d.id}')" class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${d.id===data.activeDashboardId ? 'tab-active text-white' : 'bg-slate-700/60 text-slate-300 hover:bg-slate-600'}">${d.icon||'📊'} ${escapeHtml(d.name)}</button>
         `).join('')}
         <button onclick="createDashboard()" title="New dashboard" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-slate-800 text-slate-400 hover:text-white border border-dashed border-slate-600 transition-colors">＋</button>
       </div>
       <button onclick="openCustomizeModal()" title="Customize dashboard" class="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-slate-700/60 text-slate-300 hover:text-white hover:bg-slate-600 transition-colors">⚙️</button>
     </div>
+    ${scoped ? `<div class="flex items-center gap-2 text-xs"><span class="px-2 py-1 rounded-full bg-indigo-500/20 text-indigo-300">🔎 Filtered: ${escapeHtml(scoped)}</span><button onclick="clearDashScope()" class="text-slate-400 hover:text-white">clear</button></div>` : ''}
     <div class="flex items-center gap-2 flex-wrap border-t border-slate-700/50 pt-3">
       <div class="flex items-center gap-1">
         ${presets.map(([id,lbl]) => `
@@ -1931,15 +1983,73 @@ function buildCustomizeModal() {
         <button onclick="closeCustomizeModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
       </div>
       <div>
-        <label class="text-xs text-slate-400 uppercase tracking-wider">Dashboard name</label>
+        <label class="text-xs text-slate-400 uppercase tracking-wider">Name &amp; icon</label>
         <div class="flex gap-2 mt-1">
+          <select onchange="setDashIcon(this.value)" class="input-field rounded-lg px-2 py-2.5 w-16 text-center">
+            ${['📊','✈️','🏠','💳','🍔','💰','🎯','📈','🛒','🎮','🏖️','🚗'].map(em => `<option value="${em}" ${dash.icon===em?'selected':''}>${em}</option>`).join('')}
+          </select>
           <input id="dashName" type="text" value="${escapeHtml(dash.name)}" onchange="renameDashboard(this.value)"
             class="input-field flex-1 rounded-lg px-3 py-2.5" />
+        </div>
+        <div class="flex gap-2 mt-2">
+          <button onclick="duplicateDashboard()" class="flex-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg py-2 text-xs font-medium transition-colors">⧉ Duplicate</button>
           <button onclick="deleteDashboard()" ${data.dashboards.length<=1?'disabled':''}
-            class="px-3 rounded-lg text-sm bg-slate-700 hover:bg-red-500/30 text-slate-300 hover:text-red-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors" title="Delete this dashboard">🗑️</button>
+            class="flex-1 bg-slate-700 hover:bg-red-500/30 text-slate-300 hover:text-red-300 disabled:opacity-30 disabled:cursor-not-allowed rounded-lg py-2 text-xs font-medium transition-colors">🗑️ Delete</button>
         </div>
       </div>
-      <p class="text-xs text-slate-400 -mt-1">Show/hide sections and reorder them. Each dashboard saves its own layout and time period.</p>
+
+      <!-- Dashboard-wide filter (scope) -->
+      <div class="border-t border-slate-700/50 pt-3">
+        <label class="text-xs text-slate-400 uppercase tracking-wider">Filter whole dashboard (optional)</label>
+        <p class="text-[11px] text-slate-500 mt-0.5 mb-2">Every section will only show what matches. E.g. an “Italy” dashboard scoped to a trip.</p>
+        <div class="grid grid-cols-3 gap-2">
+          <select onchange="setDashScope('groupId', this.value)" class="input-field rounded-lg px-2 py-2 text-sm">
+            <option value="">Any trip</option>
+            ${data.groups.map(g => `<option value="${g.id}" ${dash.scope.groupId===g.id?'selected':''}>${g.icon} ${g.name}</option>`).join('')}
+          </select>
+          <select onchange="setDashScope('cardId', this.value)" class="input-field rounded-lg px-2 py-2 text-sm">
+            <option value="">Any card</option>
+            ${data.cards.map(c => `<option value="${c.id}" ${dash.scope.cardId===c.id?'selected':''}>${c.icon} ${c.name}</option>`).join('')}
+          </select>
+          <select onchange="setDashScope('categoryId', this.value)" class="input-field rounded-lg px-2 py-2 text-sm">
+            <option value="">Any category</option>
+            ${data.categories.map(c => `<option value="${c.id}" ${dash.scope.categoryId===c.id?'selected':''}>${c.icon} ${c.name}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+
+      <!-- Custom KPI tiles -->
+      <div class="border-t border-slate-700/50 pt-3">
+        <label class="text-xs text-slate-400 uppercase tracking-wider">My custom KPI tiles</label>
+        <p class="text-[11px] text-slate-500 mt-0.5 mb-2">Create your own tiles (shown via the “My custom KPI tiles” section).</p>
+        <div class="space-y-1.5 mb-2">
+          ${dash.customKpis.length === 0 ? '<p class="text-xs text-slate-500">None yet.</p>' : dash.customKpis.map(t => `
+            <div class="flex items-center gap-2 bg-slate-800/60 rounded-lg px-3 py-2 text-sm">
+              <span class="flex-1 text-slate-200 truncate">${escapeHtml(t.label)} <span class="text-xs text-slate-500">(${t.metric==='count'?'count':'spent'}${t.categoryId?' · '+escapeHtml((getCategoryById(t.categoryId)||{}).name||''):''}${t.cardId?' · '+escapeHtml((getCardById(t.cardId)||{}).name||''):''})</span></span>
+              <button onclick="deleteCustomKpi('${t.id}')" class="text-slate-400 hover:text-red-400 text-sm">🗑️</button>
+            </div>`).join('')}
+        </div>
+        <div class="bg-slate-800/40 rounded-lg p-3 space-y-2">
+          <input id="ckpi_label" type="text" placeholder="Tile name (e.g. Food this month)" class="input-field w-full rounded-lg px-2 py-2 text-sm" />
+          <div class="grid grid-cols-3 gap-2">
+            <select id="ckpi_metric" class="input-field rounded-lg px-2 py-2 text-sm">
+              <option value="spent">Total spent</option>
+              <option value="count"># of expenses</option>
+            </select>
+            <select id="ckpi_cat" class="input-field rounded-lg px-2 py-2 text-sm">
+              <option value="">Any category</option>
+              ${data.categories.map(c => `<option value="${c.id}">${c.icon} ${c.name}</option>`).join('')}
+            </select>
+            <select id="ckpi_card" class="input-field rounded-lg px-2 py-2 text-sm">
+              <option value="">Any card</option>
+              ${data.cards.map(c => `<option value="${c.id}">${c.icon} ${c.name}</option>`).join('')}
+            </select>
+          </div>
+          <button onclick="addCustomKpi()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg py-2 text-sm font-medium transition-colors">+ Add tile</button>
+        </div>
+      </div>
+
+      <p class="text-xs text-slate-400 border-t border-slate-700/50 pt-3">Show/hide sections and reorder them.</p>
       <div class="space-y-2">
         ${layout.map((w, i) => `
           <div class="flex items-center gap-3 bg-slate-800/60 rounded-lg px-3 py-2.5">
@@ -2136,6 +2246,57 @@ function createDashboard() {
 function renameDashboard(val) {
   const d = ensureDashboards();
   d.name = (val || '').trim() || 'Untitled';
+  saveData(data);
+  render();
+}
+
+function setDashIcon(em) { const d = ensureDashboards(); d.icon = em; saveData(data); render(); }
+
+function duplicateDashboard() {
+  const src = ensureDashboards();
+  const copy = JSON.parse(JSON.stringify(src));
+  copy.id = uuid();
+  copy.name = src.name + ' (copy)';
+  data.dashboards.push(copy);
+  data.activeDashboardId = copy.id;
+  saveData(data);
+  showToast('Dashboard duplicated ✓');
+  render();
+}
+
+function setDashScope(field, val) {
+  const d = ensureDashboards();
+  if (!d.scope) d.scope = { groupId: '', cardId: '', categoryId: '' };
+  d.scope[field] = val;
+  saveData(data);
+  render();
+}
+function clearDashScope() {
+  const d = ensureDashboards();
+  d.scope = { groupId: '', cardId: '', categoryId: '' };
+  saveData(data);
+  render();
+}
+
+function addCustomKpi() {
+  const d = ensureDashboards();
+  const label = document.getElementById('ckpi_label').value.trim();
+  const metric = document.getElementById('ckpi_metric').value;
+  const categoryId = document.getElementById('ckpi_cat').value || '';
+  const cardId = document.getElementById('ckpi_card').value || '';
+  if (!label) { alert('Give the tile a name.'); return; }
+  if (!Array.isArray(d.customKpis)) d.customKpis = [];
+  d.customKpis.push({ id: uuid(), label, metric, categoryId, cardId });
+  // make sure the custom-KPIs section is visible
+  const layout = getDashboardLayout();
+  const w = layout.find(l => l.id === 'customKpis'); if (w) w.visible = true;
+  saveData(data);
+  showToast('Tile added ✓');
+  render();
+}
+function deleteCustomKpi(id) {
+  const d = ensureDashboards();
+  d.customKpis = (d.customKpis || []).filter(t => t.id !== id);
   saveData(data);
   render();
 }
