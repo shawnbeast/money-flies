@@ -582,8 +582,7 @@ function buildPeriodBar() {
 
 // Available dashboard widgets (order here = default order).
 const DASHBOARD_WIDGETS = [
-  { id: 'kpis',          label: 'KPI cards (spent, earned, net…)' },
-  { id: 'earnedVsSpent', label: 'Earned vs Spent bars' },
+  { id: 'kpis',          label: 'KPI cards (spent, earned…)' },
   { id: 'trend',         label: '6-Month Trend chart' },
   { id: 'donut',         label: 'Category Breakdown (donut)' },
   { id: 'budgetBars',    label: 'Budget vs Actual + category %' },
@@ -663,7 +662,7 @@ function buildDashboard() {
         </div>`;
     },
     kpis: () => `
-      <div class="grid grid-cols-2 lg:grid-cols-3 gap-4">
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
         ${kpiCard('Total Spent', formatCurrency(total), label, '#f59e0b', '💳',
           `<div class="mt-2">
             <div class="flex justify-between text-xs text-slate-400 mb-1"><span>Budget (period)</span><span>${totalBudget>0?Math.round((total/totalBudget)*100):0}%</span></div>
@@ -671,31 +670,8 @@ function buildDashboard() {
           </div>`
         )}
         ${kpiCard('Earned', formatCurrency(earned), data.payrolls.length ? 'from payroll' : 'estimated income', '#22c55e', '💵')}
-        ${kpiCard('Net (Earned − Spent)', (net < 0 ? '−' : '+') + formatCurrency(net), net < 0 ? '⚠️ Spent more than earned' : '👍 In the green', net < 0 ? '#ef4444' : '#22c55e', '⚖️')}
-        ${kpiCard('Savings Rate', savingsRate.toFixed(1) + '%', `${formatCurrency(net)} kept of ${formatCurrency(earned)}`, '#6366f1', '💰',
-          `<div class="mt-2"><div class="progress-bar h-1.5"><div style="width:${Math.min(100,savingsRate)}%;background:#6366f1" class="h-full rounded-full transition-all"></div></div></div>`
-        )}
         ${kpiCard('Remaining Budget', formatCurrency(remaining), remaining < 0 ? '⚠️ Over budget' : 'Available to spend', remaining < 0 ? '#ef4444' : '#22c55e', '🎯')}
         ${kpiCard('Daily Average', formatCurrency(dailyAvg), `over ${days} day${days===1?'':'s'}`, '#06b6d4', '📅')}
-      </div>`,
-
-    earnedVsSpent: () => `
-      <div class="card rounded-xl p-5">
-        <h3 class="font-semibold text-slate-200 mb-4">Earned vs Spent — ${label}</h3>
-        <div class="space-y-3">
-          ${(() => {
-            const max = Math.max(earned, total, 1);
-            const row = (lbl, val, color) => `
-              <div>
-                <div class="flex justify-between items-center mb-1">
-                  <span class="text-sm text-slate-300">${lbl}</span>
-                  <span class="text-sm font-semibold" style="color:${color}">${formatCurrency(val)}</span>
-                </div>
-                <div class="progress-bar h-3"><div style="width:${(val/max)*100}%;background:${color}" class="h-full rounded-full transition-all"></div></div>
-              </div>`;
-            return row('💵 Earned', earned, '#22c55e') + row('💳 Spent', total, '#f59e0b');
-          })()}
-        </div>
       </div>`,
 
     trend: () => `
