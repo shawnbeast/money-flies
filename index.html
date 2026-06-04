@@ -632,13 +632,18 @@ function buildLayout() {
       class="sm:hidden fixed right-5 z-30 w-14 h-14 rounded-full btn-primary text-white text-3xl leading-none shadow-lg flex items-center justify-center active:scale-95 transition-transform" style="bottom:calc(72px + env(safe-area-inset-bottom))">＋</button>
 
     <!-- Bottom tab bar (mobile) -->
-    <nav class="sm:hidden fixed bottom-0 left-0 right-0 z-30 glass border-t border-slate-700/60 flex overflow-x-auto scrollbar-thin" style="padding-bottom:env(safe-area-inset-bottom)">
-      ${mainTabs.map(t => `
-        <button onclick="switchTab('${t}')" class="flex-1 min-w-[3.6rem] flex flex-col items-center justify-center gap-0.5 py-2 transition-colors ${activeTab === t ? 'text-indigo-400' : 'text-slate-500 hover:text-slate-300'}">
-          <span class="text-lg leading-none">${tabIcon(t)}</span>
-          <span class="text-[10px] font-medium leading-none">${tabName(t)}</span>
-        </button>
-      `).join('')}
+    <nav class="sm:hidden fixed bottom-0 left-0 right-0 z-30 flex items-stretch px-1 pt-1.5"
+      style="padding-bottom:calc(env(safe-area-inset-bottom) + 4px); background:rgba(15,23,42,0.88); backdrop-filter:blur(16px); border-top:1px solid rgba(148,163,184,0.12); box-shadow:0 -8px 24px rgba(0,0,0,0.35)">
+      ${mainTabs.map(t => {
+        const on = activeTab === t;
+        return `
+        <button onclick="switchTab('${t}')" class="flex-1 min-w-0 flex flex-col items-center gap-1 py-1 active:scale-95 transition-transform">
+          <span class="flex items-center justify-center h-7 w-10 rounded-full transition-all duration-200 ${on ? 'text-white shadow' : 'text-slate-400'}" style="${on ? 'background:linear-gradient(135deg,var(--accent),var(--accent2))' : ''}">
+            <span class="text-[17px] leading-none">${tabIcon(t)}</span>
+          </span>
+          <span class="text-[9.5px] leading-none truncate max-w-full ${on ? 'font-semibold' : 'text-slate-500'}" style="${on ? 'color:var(--accent)' : ''}">${tabName(t)}</span>
+        </button>`;
+      }).join('')}
     </nav>
   </div>
 
