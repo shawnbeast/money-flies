@@ -470,7 +470,7 @@ function render() {
 function isAdminUser() { return !!(currentUser && currentUser.email === ADMIN_EMAIL); }
 
 function buildLayout() {
-  const mainTabs = isAdminUser() ? ['help','dashboard','expenses','income','admin'] : ['help','dashboard','expenses','income'];
+  const mainTabs = ['help','dashboard','expenses','income','budgets','trips','cards'].concat(isAdminUser() ? ['admin'] : []);
   return `
   <div class="flex flex-col min-h-screen">
     <!-- Header -->
@@ -505,30 +505,13 @@ function buildLayout() {
     ${showAccountMenu ? `<div class="fixed inset-0 z-30" onclick="closeAccountMenu()"></div>` : ''}
 
     <!-- Nav tabs -->
-    <nav class="glass border-b border-slate-700/50 px-3 sm:px-6 flex flex-wrap gap-1 py-2 sticky top-[73px] ${showMenu ? 'z-40' : 'z-10'}">
+    <nav class="glass border-b border-slate-700/50 px-3 sm:px-6 flex gap-1.5 py-2 sticky top-[73px] z-10 overflow-x-auto scrollbar-thin">
       ${mainTabs.map(t => `
-        <button onclick="switchTab('${t}')" class="px-3 sm:px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${activeTab === t ? 'tab-active text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700/50'}">
+        <button onclick="switchTab('${t}')" class="px-3 sm:px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap flex-shrink-0 ${activeTab === t ? 'tab-active text-white shadow' : 'text-slate-400 hover:text-white hover:bg-slate-700/50'}">
           ${tabLabel(t)}
         </button>
       `).join('')}
-      ${(() => {
-        const moreTabs = ['trips','cards','budgets'];
-        const moreActive = moreTabs.includes(activeTab);
-        return `
-        <div class="relative">
-          <button onclick="toggleMenu(event)" class="px-3 sm:px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap flex items-center gap-1 ${moreActive ? 'tab-active text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700/50'}">
-            More <span class="text-xs transition-transform ${showMenu?'rotate-180':''}">▾</span>
-          </button>
-          ${showMenu ? `
-            <div class="absolute left-0 mt-1 w-44 card rounded-xl shadow-xl border border-slate-600 py-1 z-30">
-              ${moreTabs.map(t => `
-                <button onclick="switchTab('${t}')" class="w-full text-left px-4 py-2 text-sm transition-colors ${activeTab===t ? 'text-indigo-400 bg-slate-700/40' : 'text-slate-300 hover:bg-slate-700/50'}">${tabLabel(t)}</button>
-              `).join('')}
-            </div>` : ''}
-        </div>`;
-      })()}
     </nav>
-    ${showMenu ? `<div class="fixed inset-0 z-30" onclick="closeMenu()"></div>` : ''}
 
     <!-- Content -->
     <main class="flex-1 p-3 pb-24 sm:p-6 max-w-7xl mx-auto w-full">
