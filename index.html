@@ -529,13 +529,6 @@ function buildLayout() {
       </div>
       <div class="flex items-center gap-2">
         <span id="syncIndicator" class="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-400 mr-1">${syncIndicatorInner()}</span>
-        ${activeTab !== 'dashboard' ? `
-          <div class="flex items-center gap-1" title="Displayed month">
-            <button onclick="shiftMonth(-1)" aria-label="Previous month" class="w-8 h-8 rounded-lg bg-slate-700/60 hover:bg-slate-600 text-slate-200 flex items-center justify-center text-lg leading-none transition-colors">‹</button>
-            <span class="text-slate-500 hidden sm:inline">📅</span>
-            <input type="month" id="monthPicker" value="${activeMonth}" class="input-field rounded-lg px-2 py-1.5 text-sm" />
-            <button onclick="shiftMonth(1)" aria-label="Next month" class="w-8 h-8 rounded-lg bg-slate-700/60 hover:bg-slate-600 text-slate-200 flex items-center justify-center text-lg leading-none transition-colors">›</button>
-          </div>` : ''}
         <button onclick="openExpenseModal()" class="btn-primary text-white rounded-lg px-3 sm:px-4 py-2 text-sm font-medium transition-all whitespace-nowrap">
           <span class="sm:hidden">＋</span><span class="hidden sm:inline">+ Add Expense</span>
         </button>
@@ -1341,7 +1334,7 @@ function buildIncome() {
       ${kpiCard('Net this year (' + yr + ')', (yNet < 0 ? '−' : '+') + formatCurrency(yNet), `${formatCurrency(yEarned)} in − ${formatCurrency(ySpent)} out`, yNet < 0 ? '#ef4444' : '#22c55e', '📈')}
       ${kpiCard('Recurring / month', formatCurrency(monthly), payrolls.length ? 'from ' + payrolls.length + ' payroll source' + (payrolls.length>1?'s':'') : 'manual estimate', '#f59e0b', '🔁')}
     </div>
-    <p class="text-xs text-slate-500 -mt-3">💡 Use the month picker (top right) to change the displayed month. One-time income counts only in the month of its date.</p>
+    <p class="text-xs text-slate-500 -mt-3">💡 One-time income counts only in the month of its date.</p>
 
     <div class="card rounded-xl p-5 flex items-center gap-4 flex-wrap">
       <span class="text-2xl">💵</span>
