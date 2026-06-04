@@ -1,5 +1,5 @@
 // Money Flies service worker — makes the app work offline after first load.
-const CACHE = 'money-flies-v33';
+const CACHE = 'money-flies-v34';
 const ASSETS = [
   './',
   './index.html',
