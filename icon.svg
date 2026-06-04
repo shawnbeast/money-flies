@@ -6,5 +6,13 @@
     </linearGradient>
   </defs>
   <rect width="512" height="512" rx="112" fill="url(#g)"/>
-  <text x="50%" y="52%" font-size="300" text-anchor="middle" dominant-baseline="central">💸</text>
+  <!-- motion lines (the "flies") -->
+  <g fill="#ffffff" opacity="0.55">
+    <rect x="70"  y="196" width="120" height="20" rx="10"/>
+    <rect x="50"  y="248" width="150" height="20" rx="10"/>
+    <rect x="78"  y="300" width="110" height="20" rx="10"/>
+  </g>
+  <!-- dollar mark -->
+  <text x="312" y="258" font-family="Arial, Helvetica, sans-serif" font-size="320" font-weight="800"
+        fill="#ffffff" text-anchor="middle" dominant-baseline="central">$</text>
 </svg>

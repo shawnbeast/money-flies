@@ -1,14 +1,17 @@
 {
   "name": "Money Flies",
   "short_name": "Money Flies",
-  "description": "Personal expense & budget tracker",
+  "description": "Personal Finance Dashboards Boosted — track expenses, income & budgets.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#0f172a",
   "theme_color": "#0f172a",
+  "lang": "en",
+  "categories": ["finance", "productivity"],
   "icons": [
-    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
   ]
 }

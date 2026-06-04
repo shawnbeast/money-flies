@@ -61,6 +61,10 @@
   .toast.show { opacity: 1; transform: translateY(0); }
   .toast.success { border-color: rgba(34,197,94,0.5); }
   .drag-handle { touch-action: none; cursor: grab; }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  .fade-in-up > * { animation: fadeUp .35s ease both; }
+  #ptr { position: fixed; top: 70px; left: 0; right: 0; display: flex; justify-content: center; pointer-events: none; z-index: 25; transition: opacity .2s; }
+  #ptr .pill { background: #1e293b; border: 1px solid #334155; color: #cbd5e1; border-radius: 9999px; padding: 6px 14px; font-size: 12px; box-shadow: 0 6px 18px rgba(0,0,0,.35); }
   #widgetSortList [data-wid].dragging { opacity: 0.55; }
   /* Clean dropdowns: hide the native arrow, add a discreet custom chevron */
   select.input-field {
@@ -490,8 +494,12 @@ function showConfirm(message, opts = {}) {
   });
 }
 
+// ─── Haptics ──────────────────────────────────────────────────────────────────
+function vibrate(ms) { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) {} }
+
 // ─── Toasts ───────────────────────────────────────────────────────────────────
 function showToast(message, type = 'success') {
+  vibrate(12);
   let host = document.getElementById('toastHost');
   if (!host) { host = document.createElement('div'); host.id = 'toastHost'; document.body.appendChild(host); }
   const t = document.createElement('div');
@@ -503,13 +511,40 @@ function showToast(message, type = 'success') {
 }
 
 // ─── Render ───────────────────────────────────────────────────────────────────
+let _animate = false; // play entrance animations on this render (set on tab switch / boot)
 function render() {
   _monthTotalsCache = {}; // fresh per render (data/currency may have changed)
   const app = document.getElementById('app');
   app.innerHTML = buildLayout();
   attachEvents();
+  const doAnim = _animate;
   // Defer charts one frame so the UI paints instantly, then charts fill in.
-  requestAnimationFrame(renderCharts);
+  requestAnimationFrame(() => { renderCharts(); if (doAnim) animateCounters(); });
+  _animate = false;
+}
+
+// Animate any <span class="countup" data-to data-kind> from 0 to its value.
+function fmtKind(v, kind) {
+  if (kind === 'pct') return v.toFixed(1) + '%';
+  if (kind === 'num') return Math.round(v).toLocaleString('en-US');
+  return formatCurrency(v);
+}
+function countUp(num, kind = 'cur') {
+  return `<span class="countup" data-to="${num}" data-kind="${kind}">${fmtKind(Number(num) || 0, kind)}</span>`;
+}
+function animateCounters() {
+  document.querySelectorAll('.countup').forEach(el => {
+    const to = parseFloat(el.dataset.to); const kind = el.dataset.kind;
+    if (!isFinite(to)) return;
+    const dur = 650, t0 = performance.now();
+    const tick = (t) => {
+      const p = Math.min(1, (t - t0) / dur);
+      const v = to * (1 - Math.pow(1 - p, 3));
+      el.textContent = fmtKind(v, kind);
+      if (p < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
 }
 
 function isAdminUser() { return !!(currentUser && currentUser.email === ADMIN_EMAIL); }
@@ -559,7 +594,7 @@ function buildLayout() {
     </nav>
 
     <!-- Content -->
-    <main class="flex-1 p-3 pb-28 sm:p-6 max-w-7xl mx-auto w-full">
+    <main class="flex-1 p-3 pb-28 sm:p-6 max-w-7xl mx-auto w-full ${_animate ? 'fade-in-up' : ''}">
       ${activeTab === 'dashboard' ? buildDashboard() : ''}
       ${activeTab === 'expenses' ? buildExpenses() : ''}
       ${activeTab === 'trips' ? buildTrips() : ''}
@@ -622,6 +657,7 @@ function buildPeriodBar() {
 
 // Available dashboard widgets (order here = default order).
 const DASHBOARD_WIDGETS = [
+  { id: 'insights',      label: '💡 Smart insights' },
   { id: 'kpis',          label: 'KPI cards (spent, earned…)' },
   { id: 'trend',         label: '6-Month Trend chart' },
   { id: 'donut',         label: 'Category Breakdown (donut)' },
@@ -684,6 +720,31 @@ function buildDashboard() {
 
   // Each widget is a function returning its HTML block (or '' to render nothing).
   const widgets = {
+    insights: () => {
+      const now = new Date();
+      const thisM = now.toISOString().slice(0, 7);
+      const lastM = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 7);
+      const tThis = getMonthTotals(thisM).total, tLast = getMonthTotals(lastM).total;
+      const items = [];
+      if (tLast > 0) {
+        const diff = ((tThis - tLast) / tLast) * 100, up = diff >= 0;
+        items.push(`<span>${up ? '📈' : '📉'}</span><span>You've spent <b class="${up ? 'text-red-400' : 'text-emerald-400'}">${Math.abs(diff).toFixed(0)}% ${up ? 'more' : 'less'}</b> this month than last (${formatCurrency(tThis)} vs ${formatCurrency(tLast)}).</span>`);
+      }
+      const catsArr = Object.entries(byCategory).map(([id, a]) => ({ id, a })).filter(x => x.a > 0).sort((a, b) => b.a - a.a);
+      if (catsArr.length) { const c = getCategoryById(catsArr[0].id); items.push(`<span>${c.icon}</span><span>Your biggest category is <b>${c.name}</b> — ${formatCurrency(catsArr[0].a)} (${total > 0 ? Math.round(catsArr[0].a / total * 100) : 0}% of spend).</span>`); }
+      if (totalBudget > 0) items.push(remaining >= 0
+        ? `<span>🎯</span><span>You have <b class="text-emerald-400">${formatCurrency(remaining)}</b> left of your ${formatCurrency(totalBudget)} budget.</span>`
+        : `<span>⚠️</span><span>You're <b class="text-red-400">${formatCurrency(-remaining)}</b> over budget this period.</span>`);
+      if (total > 0) items.push(`<span>📅</span><span>Averaging <b>${formatCurrency(dailyAvg)}</b>/day this period.</span>`);
+      if (!items.length) return '';
+      return `
+      <div class="card rounded-xl p-5">
+        <h3 class="font-semibold text-slate-200 mb-3">💡 Insights — ${label}</h3>
+        <ul class="space-y-2.5 text-sm text-slate-300">
+          ${items.map(i => `<li class="flex gap-2.5 items-start">${i}</li>`).join('')}
+        </ul>
+      </div>`;
+    },
     customKpis: () => {
       const dash = ensureDashboards();
       const tiles = dash.customKpis || [];
@@ -703,15 +764,15 @@ function buildDashboard() {
     },
     kpis: () => `
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        ${kpiCard('Total Spent', formatCurrency(total), label, '#f59e0b', '💳',
+        ${kpiCard('Total Spent', countUp(total), label, '#f59e0b', '💳',
           `<div class="mt-2">
             <div class="flex justify-between text-xs text-slate-400 mb-1"><span>Budget (period)</span><span>${totalBudget>0?Math.round((total/totalBudget)*100):0}%</span></div>
             <div class="progress-bar h-1.5"><div style="width:${totalBudget>0?Math.min(100,(total/totalBudget)*100):0}%;background:${total>totalBudget?'#ef4444':'#f59e0b'}" class="h-full rounded-full transition-all"></div></div>
           </div>`
         )}
-        ${kpiCard('Earned', formatCurrency(earned), data.payrolls.length ? 'from payroll' : 'estimated income', '#22c55e', '💵')}
-        ${kpiCard('Remaining Budget', formatCurrency(remaining), remaining < 0 ? '⚠️ Over budget' : 'Available to spend', remaining < 0 ? '#ef4444' : '#22c55e', '🎯')}
-        ${kpiCard('Daily Average', formatCurrency(dailyAvg), `over ${days} day${days===1?'':'s'}`, '#06b6d4', '📅')}
+        ${kpiCard('Earned', countUp(earned), data.payrolls.length ? 'from payroll' : 'estimated income', '#22c55e', '💵')}
+        ${kpiCard('Remaining Budget', countUp(remaining), remaining < 0 ? '⚠️ Over budget' : 'Available to spend', remaining < 0 ? '#ef4444' : '#22c55e', '🎯')}
+        ${kpiCard('Daily Average', countUp(dailyAvg), `over ${days} day${days===1?'':'s'}`, '#06b6d4', '📅')}
       </div>`,
 
     trend: () => `
@@ -2155,7 +2216,7 @@ function closeMenu() { showMenu = false; render(); }
 function toggleAccountMenu(event) { event.stopPropagation(); showAccountMenu = !showAccountMenu; render(); }
 function closeAccountMenu() { showAccountMenu = false; render(); }
 
-function switchTab(tab) { activeTab = tab; showMenu = false; render(); }
+function switchTab(tab) { activeTab = tab; showMenu = false; _animate = true; vibrate(8); render(); }
 function shiftMonth(delta) {
   const [y, m] = activeMonth.split('-').map(Number);
   const d = new Date(y, m - 1 + delta, 1);
@@ -2838,10 +2899,46 @@ async function boot() {
   }
   if (currentUser) generateRecurringExpenses(); // fill in due rent/subscriptions up to today
   applyActiveDashboardPeriod();
+  _animate = true;
   renderRoot();
   refreshRates(); // fetch live FX rates in the background, then re-render
+  setupPullToRefresh();
 }
 boot();
+
+// ─── Pull-to-refresh (mobile) ──────────────────────────────────────────────────
+function setupPullToRefresh() {
+  let startY = null, pulling = 0, ptrEl = null;
+  const showPtr = (txt) => {
+    if (!ptrEl) { ptrEl = document.createElement('div'); ptrEl.id = 'ptr'; ptrEl.innerHTML = `<div class="pill"></div>`; document.body.appendChild(ptrEl); }
+    ptrEl.querySelector('.pill').textContent = txt;
+    ptrEl.style.opacity = '1';
+  };
+  const hidePtr = () => { if (ptrEl) ptrEl.style.opacity = '0'; };
+  document.addEventListener('touchstart', (e) => {
+    startY = (window.scrollY <= 0 && e.touches.length === 1) ? e.touches[0].clientY : null;
+    pulling = 0;
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (startY == null) return;
+    pulling = e.touches[0].clientY - startY;
+    if (pulling > 12) showPtr(pulling > 70 ? '↻ Release to refresh' : '↓ Pull to refresh');
+    else hidePtr();
+  }, { passive: true });
+  document.addEventListener('touchend', async () => {
+    if (startY == null) return;
+    const trigger = pulling > 70;
+    startY = null;
+    if (trigger) {
+      showPtr('↻ Refreshing…'); vibrate(15);
+      try { if (currentUser && !currentUser.local && supa) await loadFromCloud(); } catch (e) {}
+      await refreshRates();
+      _animate = true; renderRoot();
+      showToast('Refreshed ✓');
+    }
+    hidePtr();
+  });
+}
 
 // Register service worker so the app works offline after first load (no-op on file://).
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
