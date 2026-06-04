@@ -454,13 +454,13 @@ function buildLayout() {
 
     <!-- Nav tabs -->
     <nav class="glass border-b border-slate-700/50 px-6 flex gap-1 py-2 sticky top-[73px] ${showMenu ? 'z-40' : 'z-10'}">
-      ${['dashboard','expenses','income'].map(t => `
+      ${['help','dashboard','expenses','income'].map(t => `
         <button onclick="switchTab('${t}')" class="px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${activeTab === t ? 'tab-active text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700/50'}">
           ${tabLabel(t)}
         </button>
       `).join('')}
       ${(() => {
-        const moreTabs = ['trips','cards','budgets','help'];
+        const moreTabs = ['trips','cards','budgets'];
         const moreActive = moreTabs.includes(activeTab);
         return `
         <div class="relative">
@@ -2498,6 +2498,7 @@ async function loadFromCloud() {
 // Save the current data blob to the cloud (debounced). No-op when signed out.
 function saveToCloud(immediate) {
   if (!currentUser || !supa) return;
+  if (currentUser.email) data.ownerEmail = currentUser.email; // so the admin view can identify users
   const doSave = () => supa.from('app_state')
     .upsert({ user_id: currentUser.id, data, updated_at: new Date().toISOString() })
     .then(({ error }) => { if (error) console.warn('cloud save failed', error.message); });
