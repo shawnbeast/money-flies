@@ -1775,7 +1775,17 @@ function buildExpenseModal() {
 
 function buildCategoryModal() {
   const c = editingCategory;
-  const emojis = ['🍔','🚗','🛍️','💊','🎮','⚡','🏠','💰','📦','✈️','🎓','💻','🏋️','🍷','🎁','📱','🐾','🌿'];
+  const emojis = [
+    '🍔','🍕','🍣','☕','🍷','🍺','🛒','🥑','🍫','🧁',
+    '🚗','⛽','🚕','🚌','🚆','✈️','🚲','🅿️','🛵','🚢',
+    '🏠','🛋️','🔌','⚡','💧','🔥','📶','🧹','🛠️','🪴',
+    '🛍️','👕','👟','👜','💄','💍','🧴','🎀','🕶️','⌚',
+    '💊','🏥','🦷','🩺','💉','🧘','🏋️','💆','🧠','🩹',
+    '🎮','🎬','🎵','🎤','🎟️','🎢','📺','🎨','📚','🎲',
+    '🎓','💻','📱','🖨️','🔋','🧾','🏦','💳','💰','📈',
+    '🐾','🐶','🐱','🌿','🎁','🧸','👶','💼','✂️','🧳',
+    '🍎','🏝️','🎄','🎂','💐','🚿','🧼','📦','💡','⭐',
+  ];
   return `
   <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
     <div class="card rounded-2xl w-full max-w-sm p-6 space-y-4" onclick="event.stopPropagation()">
@@ -1791,8 +1801,8 @@ function buildCategoryModal() {
         </div>
         <div>
           <label class="text-xs text-slate-400 uppercase tracking-wider">Icon</label>
-          <div class="flex flex-wrap gap-2 mt-1">
-            ${emojis.map(em => `<button onclick="selectEmoji('${em}')" id="emoji_${em}" class="w-9 h-9 rounded-lg text-lg hover:bg-slate-600 transition-colors ${(c?.icon||'📦')===em?'bg-indigo-600':'bg-slate-700'}">${em}</button>`).join('')}
+          <div class="flex flex-wrap gap-2 mt-1 max-h-40 overflow-y-auto scrollbar-thin pr-1">
+            ${emojis.map(em => `<button onclick="selectEmoji('${em}')" id="emoji_${em}" class="w-9 h-9 rounded-lg text-lg hover:bg-slate-600 transition-colors flex-shrink-0 ${(c?.icon||'📦')===em?'bg-indigo-600':'bg-slate-700'}">${em}</button>`).join('')}
           </div>
           <input id="cat_icon" type="hidden" value="${c?.icon||'📦'}" />
         </div>
