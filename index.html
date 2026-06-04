@@ -87,6 +87,7 @@ const FALLBACK_RATES = { USD:1, EUR:0.92, GBP:0.79, JPY:157, CAD:1.36, AUD:1.52,
 // ─── Supabase (auth + cloud sync) ───────────────────────────────────────────
 const SUPABASE_URL = 'https://fzcaajhlpvkpqrhfwwdd.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ6Y2FhamhscHZrcHFyaGZ3d2RkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0NjAyOTcsImV4cCI6MjA5NjAzNjI5N30.Y_lDdhzC65w0xcCh15dRF-N1Ovxnv1vO7vfpqs-PzPw';
+const ADMIN_EMAIL = 'shawndas21@gmail.com'; // only this account sees the Admin tab
 let supa = null;          // supabase client
 let currentUser = null;   // logged-in user (or null)
 let cloudSaveTimer = null; // debounce handle for cloud writes
@@ -150,6 +151,7 @@ let editingRecurring = null;
 let showCustomizeModal = false; // dashboard layout editor
 let showMenu = false; // "More" nav dropdown
 let showAccountMenu = false; // header account/data dropdown
+let adminData = null, adminLoading = false, adminError = null; // admin view cache
 function emptyFilters() { return { search: '', categoryId: '', cardId: '', groupId: '', start: '', end: '', min: '', max: '' }; }
 let expenseFilters = emptyFilters();
 let filtersOpen = false; // advanced filter panel expanded
@@ -417,7 +419,10 @@ function render() {
   requestAnimationFrame(renderCharts);
 }
 
+function isAdminUser() { return !!(currentUser && currentUser.email === ADMIN_EMAIL); }
+
 function buildLayout() {
+  const mainTabs = isAdminUser() ? ['help','dashboard','expenses','income','admin'] : ['help','dashboard','expenses','income'];
   return `
   <div class="flex flex-col min-h-screen">
     <!-- Header -->
@@ -454,7 +459,7 @@ function buildLayout() {
 
     <!-- Nav tabs -->
     <nav class="glass border-b border-slate-700/50 px-6 flex gap-1 py-2 sticky top-[73px] ${showMenu ? 'z-40' : 'z-10'}">
-      ${['help','dashboard','expenses','income'].map(t => `
+      ${mainTabs.map(t => `
         <button onclick="switchTab('${t}')" class="px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${activeTab === t ? 'tab-active text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700/50'}">
           ${tabLabel(t)}
         </button>
@@ -487,6 +492,7 @@ function buildLayout() {
       ${activeTab === 'income' ? buildIncome() : ''}
       ${activeTab === 'budgets' ? buildBudgets() : ''}
       ${activeTab === 'help' ? buildHelp() : ''}
+      ${activeTab === 'admin' ? buildAdmin() : ''}
     </main>
   </div>
 
@@ -866,6 +872,85 @@ function buildHelp() {
     <div class="text-center">
       <button onclick="switchTab('dashboard')" class="btn-primary text-white rounded-lg px-5 py-2.5 text-sm font-medium">Got it — go to my dashboard</button>
     </div>
+  </div>`;
+}
+
+// ─── Admin (owner only) ───────────────────────────────────────────────────────
+async function loadAdminData() {
+  if (adminLoading || !supa) return;
+  adminLoading = true; adminError = null;
+  try {
+    const { data: rows, error } = await supa.from('app_state').select('user_id, data, updated_at');
+    if (error) throw error;
+    adminData = rows || [];
+  } catch (e) {
+    adminError = (e && e.message) || 'Could not load (check the admin SQL policy in Supabase).';
+    adminData = [];
+  }
+  adminLoading = false;
+  if (activeTab === 'admin') render();
+}
+function refreshAdmin() { adminData = null; adminError = null; render(); }
+
+function buildAdmin() {
+  if (!isAdminUser()) return `<div class="card rounded-xl p-6 text-center text-slate-400">Access denied.</div>`;
+  if (adminError) return `
+    <div class="card rounded-xl p-6 text-center space-y-3">
+      <p class="text-red-400 text-sm">⚠️ ${escapeHtml(adminError)}</p>
+      <button onclick="refreshAdmin()" class="btn-primary text-white rounded-lg px-4 py-2 text-sm">Retry</button>
+    </div>`;
+  if (adminData === null) { loadAdminData(); return `<div class="card rounded-xl py-16 text-center text-slate-500">Loading users…</div>`; }
+
+  const rows = adminData.map(r => {
+    const d = r.data || {};
+    const exps = Array.isArray(d.expenses) ? d.expenses : [];
+    const total = exps.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+    return { email: d.ownerEmail || r.user_id, total, count: exps.length, last: r.updated_at, cur: d.baseCurrency || 'CAD' };
+  }).sort((a, b) => b.total - a.total);
+  const grand = rows.reduce((s, r) => s + r.total, 0);
+  const fmtDate = ts => { try { return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' }); } catch (e) { return '—'; } };
+
+  return `
+  <div class="space-y-5 max-w-4xl mx-auto">
+    <div class="card rounded-xl p-5 flex items-center gap-4 flex-wrap">
+      <span class="text-2xl">🔐</span>
+      <div class="flex-1 min-w-[200px]">
+        <p class="font-medium text-slate-100">Admin — Users overview</p>
+        <p class="text-xs text-slate-400">Private to you. Spending ranked highest → lowest.</p>
+      </div>
+      <button onclick="refreshAdmin()" class="bg-slate-700 hover:bg-slate-600 text-white rounded-lg px-3 py-2 text-sm transition-colors">🔄 Refresh</button>
+    </div>
+
+    <div class="grid grid-cols-2 sm:grid-cols-3 gap-4">
+      ${kpiCard('Users', String(rows.length), 'accounts with data', '#6366f1', '👥')}
+      ${kpiCard('Total spent (all)', formatCurrency(grand), 'across all users', '#f59e0b', '💳')}
+      ${kpiCard('Avg / user', formatCurrency(rows.length ? grand / rows.length : 0), 'average spend', '#06b6d4', '📊')}
+    </div>
+
+    <div class="card rounded-xl overflow-hidden">
+      <div class="px-5 py-4 border-b border-slate-700"><h3 class="font-semibold text-slate-200">${rows.length} user${rows.length===1?'':'s'}</h3></div>
+      ${rows.length === 0 ? `<div class="py-12 text-center text-slate-500 text-sm">No users yet (or the admin SQL policy isn't set — see note below).</div>` : `
+      <div class="divide-y divide-slate-700/50">
+        ${rows.map((u, i) => {
+          const pct = grand > 0 ? (u.total / grand) * 100 : 0;
+          return `
+          <div class="flex items-center gap-4 px-5 py-3.5">
+            <span class="text-slate-500 text-sm w-5 text-center flex-shrink-0">${i+1}</span>
+            <div class="w-9 h-9 rounded-full bg-indigo-600 text-white flex items-center justify-center text-sm font-semibold flex-shrink-0">${escapeHtml((u.email[0]||'?').toUpperCase())}</div>
+            <div class="flex-1 min-w-0">
+              <p class="font-medium text-slate-200 truncate">${escapeHtml(u.email)}</p>
+              <p class="text-xs text-slate-500">${u.count} expense${u.count===1?'':'s'} · last active ${fmtDate(u.last)}</p>
+              <div class="progress-bar h-1.5 mt-1.5 max-w-xs"><div style="width:${pct}%;background:#6366f1" class="h-full rounded-full"></div></div>
+            </div>
+            <div class="text-right flex-shrink-0">
+              <p class="font-bold text-slate-100">${formatCurrency(u.total)}</p>
+              <p class="text-xs text-slate-500">${pct.toFixed(0)}% of total</p>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`}
+    </div>
+    <p class="text-xs text-slate-500 text-center">Amounts are each user's stored base-currency totals (most use CAD). Updated when each user last used the app.</p>
   </div>`;
 }
 
@@ -1943,7 +2028,7 @@ function attachEvents() {
 }
 
 function tabLabel(t) {
-  return { dashboard:'📊 Dashboard', expenses:'📋 Expenses', trips:'✈️ Trips', cards:'💳 Cards', income:'💵 Income', budgets:'🎯 Budgets', help:'❓ Guide' }[t] || t;
+  return { dashboard:'📊 Dashboard', expenses:'📋 Expenses', trips:'✈️ Trips', cards:'💳 Cards', income:'💵 Income', budgets:'🎯 Budgets', help:'❓ Guide', admin:'🔐 Admin' }[t] || t;
 }
 function toggleMenu(event) { event.stopPropagation(); showMenu = !showMenu; render(); }
 function closeMenu() { showMenu = false; render(); }
