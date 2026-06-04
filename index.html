@@ -486,7 +486,7 @@ function buildLayout() {
     ${showMenu ? `<div class="fixed inset-0 z-30" onclick="closeMenu()"></div>` : ''}
 
     <!-- Content -->
-    <main class="flex-1 p-3 sm:p-6 max-w-7xl mx-auto w-full">
+    <main class="flex-1 p-3 pb-24 sm:p-6 max-w-7xl mx-auto w-full">
       ${activeTab === 'dashboard' ? buildDashboard() : ''}
       ${activeTab === 'expenses' ? buildExpenses() : ''}
       ${activeTab === 'trips' ? buildTrips() : ''}
@@ -496,6 +496,10 @@ function buildLayout() {
       ${activeTab === 'help' ? buildHelp() : ''}
       ${activeTab === 'admin' ? buildAdmin() : ''}
     </main>
+
+    <!-- Floating add button (mobile) -->
+    <button onclick="openExpenseModal()" title="Add expense" aria-label="Add expense"
+      class="sm:hidden fixed bottom-5 right-5 z-30 w-14 h-14 rounded-full btn-primary text-white text-3xl leading-none shadow-lg flex items-center justify-center active:scale-95 transition-transform">＋</button>
   </div>
 
   ${showExpenseModal ? buildExpenseModal() : ''}
@@ -1543,9 +1547,13 @@ function buildExpenseModal() {
         <p id="convertPreview" class="text-xs text-slate-400 -mt-1"></p>
         <div>
           <label class="text-xs text-slate-400 uppercase tracking-wider">Category *</label>
-          <select id="exp_cat" class="input-field w-full rounded-lg px-3 py-2.5 mt-1">
-            ${data.categories.map(c => `<option value="${c.id}" ${defCat===c.id?'selected':''}>${c.icon} ${c.name}</option>`).join('')}
-          </select>
+          <div class="flex flex-wrap gap-2 mt-1.5">
+            ${data.categories.map(c => `
+              <button type="button" data-cat="${c.id}" onclick="selectExpCat('${c.id}')"
+                class="exp-cat-chip px-3 py-2 rounded-lg text-sm transition-colors ${defCat===c.id?'bg-indigo-600 text-white':'bg-slate-700 text-slate-300 hover:bg-slate-600'}">${c.icon} ${c.name}</button>
+            `).join('')}
+          </div>
+          <input id="exp_cat" type="hidden" value="${defCat||''}" />
         </div>
         <div>
           <label class="text-xs text-slate-400 uppercase tracking-wider">Paid with (card)</label>
@@ -1567,9 +1575,10 @@ function buildExpenseModal() {
             class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
         </div>
       </div>
-      <div class="flex gap-3 pt-2">
-        <button onclick="closeExpenseModal()" class="flex-1 bg-slate-700 hover:bg-slate-600 text-white rounded-lg py-2.5 text-sm font-medium transition-colors">Cancel</button>
-        <button onclick="saveExpense()" class="flex-1 btn-primary text-white rounded-lg py-2.5 text-sm font-medium transition-all">${e ? 'Save Changes' : 'Add Expense'}</button>
+      <div class="space-y-2 pt-2">
+        <button onclick="saveExpense()" class="w-full btn-primary text-white rounded-lg py-3 text-sm font-semibold transition-all">${e ? 'Save Changes' : 'Add Expense'}</button>
+        ${!e ? `<button onclick="saveExpense(true)" class="w-full bg-slate-700 hover:bg-slate-600 text-slate-100 rounded-lg py-2.5 text-sm font-medium transition-colors">＋ Add &amp; enter another</button>` : ''}
+        <button onclick="closeExpenseModal()" class="w-full text-slate-400 hover:text-white rounded-lg py-2 text-sm font-medium transition-colors">Cancel</button>
       </div>
     </div>
   </div>`;
@@ -2198,7 +2207,15 @@ function updateConvertPreview() {
   el.textContent = `≈ ${formatCurrency(toBase(amt, cur))} ${data.baseCurrency} (1 ${cur} = ${formatCurrency(toBase(1, cur))})`;
 }
 
-function saveExpense() {
+function selectExpCat(id) {
+  const hid = document.getElementById('exp_cat'); if (hid) hid.value = id;
+  document.querySelectorAll('.exp-cat-chip').forEach(b => {
+    const on = b.getAttribute('data-cat') === id;
+    b.className = 'exp-cat-chip px-3 py-2 rounded-lg text-sm transition-colors ' + (on ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600');
+  });
+}
+
+function saveExpense(andAnother) {
   const desc = document.getElementById('exp_desc').value.trim();
   const origAmount = parseFloat(document.getElementById('exp_amount').value);
   const currency = document.getElementById('exp_currency').value;
@@ -2207,7 +2224,7 @@ function saveExpense() {
   const note = document.getElementById('exp_note').value.trim();
   const groupId = document.getElementById('exp_group').value || null;
   const cardId = document.getElementById('exp_card').value || null;
-  if (!desc || !origAmount || origAmount <= 0 || !date) { alert('Please fill in all required fields.'); return; }
+  if (!desc || !origAmount || origAmount <= 0 || !date || !categoryId) { alert('Please fill in description, amount, date and category.'); return; }
   const amount = toBase(origAmount, currency); // cached base value for convenience
   if (editingExpense) {
     Object.assign(editingExpense, { description: desc, origAmount, currency, amount, date, categoryId, note, groupId, cardId });
@@ -2215,7 +2232,13 @@ function saveExpense() {
     data.expenses.push({ id: uuid(), description: desc, origAmount, currency, amount, date, categoryId, note, groupId, cardId, createdAt: new Date().toISOString() });
   }
   saveData(data);
-  closeExpenseModal();
+  if (andAnother && !editingExpense) {
+    // keep the modal open and reset for the next entry (chained entry)
+    render();
+    setTimeout(() => { const el = document.getElementById('exp_desc'); if (el) el.focus(); }, 60);
+  } else {
+    closeExpenseModal();
+  }
 }
 
 function deleteExpense(id) {
