@@ -13,11 +13,17 @@
 <link rel="manifest" href="manifest.json" />
 <link rel="icon" href="icon.svg" type="image/svg+xml" />
 <link rel="apple-touch-icon" href="icon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
-  html, body { background: #0f172a; font-family: 'Inter', system-ui, sans-serif; max-width: 100%; overflow-x: hidden; }
+  html, body { background: #0f172a; font-family: 'Inter', system-ui, sans-serif; max-width: 100%; overflow-x: hidden; -webkit-font-smoothing: antialiased; }
+  /* aligned numerals for clean money columns */
+  body { font-feature-settings: 'tnum' 1, 'cv01' 1; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
   /* prevent flex/grid children from forcing the page wider than the screen */
   .min-w-0 { min-width: 0; }
   input, select, button { max-width: 100%; }
@@ -445,6 +451,45 @@ function monthLabel(m) {
   return new Date(y, mo - 1, 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
 }
 
+// ─── Sync status ──────────────────────────────────────────────────────────────
+let syncState = 'saved'; // 'saved' | 'saving' | 'offline'
+function syncIndicatorInner() {
+  const map = {
+    saved:   ['#22c55e', 'Saved'],
+    saving:  ['#f59e0b', 'Saving…'],
+    offline: ['#64748b', 'Offline'],
+  };
+  const [color, txt] = map[syncState] || map.saved;
+  return `<span style="width:7px;height:7px;border-radius:9999px;background:${color}" class="inline-block ${syncState==='saving'?'animate-pulse':''}"></span>${txt}`;
+}
+function setSyncState(s) {
+  syncState = s;
+  const el = document.getElementById('syncIndicator');
+  if (el) el.innerHTML = syncIndicatorInner();
+}
+
+// ─── Styled confirm dialog (replaces native confirm) ────────────────────────────
+function showConfirm(message, opts = {}) {
+  return new Promise(resolve => {
+    const host = document.createElement('div');
+    host.className = 'modal-bg fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4';
+    host.innerHTML = `
+      <div class="card w-full sm:max-w-sm p-6 space-y-4 rounded-t-2xl sm:rounded-2xl">
+        <p class="text-slate-200 text-sm leading-relaxed">${message}</p>
+        <div class="flex gap-3">
+          <button data-x class="flex-1 bg-slate-700 hover:bg-slate-600 text-white rounded-lg py-2.5 text-sm font-medium transition-colors">${opts.cancelText || 'Cancel'}</button>
+          <button data-ok class="flex-1 ${opts.danger ? 'bg-red-500 hover:bg-red-600' : 'btn-primary'} text-white rounded-lg py-2.5 text-sm font-semibold transition-colors">${opts.confirmText || 'Confirm'}</button>
+        </div>
+      </div>`;
+    const close = v => { host.remove(); resolve(v); };
+    host.addEventListener('click', e => { if (e.target === host) close(false); });
+    host.querySelector('[data-x]').onclick = () => close(false);
+    host.querySelector('[data-ok]').onclick = () => close(true);
+    document.body.appendChild(host);
+    requestAnimationFrame(() => { const b = host.querySelector('[data-ok]'); if (b) b.focus(); });
+  });
+}
+
 // ─── Toasts ───────────────────────────────────────────────────────────────────
 function showToast(message, type = 'success') {
   let host = document.getElementById('toastHost');
@@ -483,6 +528,7 @@ function buildLayout() {
         </div>
       </div>
       <div class="flex items-center gap-2">
+        <span id="syncIndicator" class="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-400 mr-1">${syncIndicatorInner()}</span>
         ${activeTab !== 'dashboard' ? `<input type="month" id="monthPicker" value="${activeMonth}" class="input-field rounded-lg px-3 py-1.5 text-sm" />` : ''}
         <button onclick="openExpenseModal()" class="btn-primary text-white rounded-lg px-3 sm:px-4 py-2 text-sm font-medium transition-all whitespace-nowrap">
           <span class="sm:hidden">＋</span><span class="hidden sm:inline">+ Add Expense</span>
@@ -504,17 +550,17 @@ function buildLayout() {
     </header>
     ${showAccountMenu ? `<div class="fixed inset-0 z-30" onclick="closeAccountMenu()"></div>` : ''}
 
-    <!-- Nav tabs -->
-    <nav class="glass border-b border-slate-700/50 px-3 sm:px-6 flex flex-wrap justify-center sm:justify-start gap-1.5 py-2 sticky top-[73px] z-10">
+    <!-- Nav tabs (desktop) -->
+    <nav class="hidden sm:flex glass border-b border-slate-700/50 px-6 flex-wrap justify-start gap-1.5 py-2 sticky top-[73px] z-10">
       ${mainTabs.map(t => `
-        <button onclick="switchTab('${t}')" class="px-3 sm:px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${activeTab === t ? 'tab-active text-white shadow' : 'text-slate-400 hover:text-white hover:bg-slate-700/50'}">
+        <button onclick="switchTab('${t}')" class="px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${activeTab === t ? 'tab-active text-white shadow' : 'text-slate-400 hover:text-white hover:bg-slate-700/50'}">
           ${tabLabel(t)}
         </button>
       `).join('')}
     </nav>
 
     <!-- Content -->
-    <main class="flex-1 p-3 pb-24 sm:p-6 max-w-7xl mx-auto w-full">
+    <main class="flex-1 p-3 pb-28 sm:p-6 max-w-7xl mx-auto w-full">
       ${activeTab === 'dashboard' ? buildDashboard() : ''}
       ${activeTab === 'expenses' ? buildExpenses() : ''}
       ${activeTab === 'trips' ? buildTrips() : ''}
@@ -527,7 +573,17 @@ function buildLayout() {
 
     <!-- Floating add button (mobile) -->
     <button onclick="openExpenseModal()" title="Add expense" aria-label="Add expense"
-      class="sm:hidden fixed bottom-5 right-5 z-30 w-14 h-14 rounded-full btn-primary text-white text-3xl leading-none shadow-lg flex items-center justify-center active:scale-95 transition-transform">＋</button>
+      class="sm:hidden fixed right-5 z-30 w-14 h-14 rounded-full btn-primary text-white text-3xl leading-none shadow-lg flex items-center justify-center active:scale-95 transition-transform" style="bottom:calc(72px + env(safe-area-inset-bottom))">＋</button>
+
+    <!-- Bottom tab bar (mobile) -->
+    <nav class="sm:hidden fixed bottom-0 left-0 right-0 z-30 glass border-t border-slate-700/60 flex overflow-x-auto scrollbar-thin" style="padding-bottom:env(safe-area-inset-bottom)">
+      ${mainTabs.map(t => `
+        <button onclick="switchTab('${t}')" class="flex-1 min-w-[3.6rem] flex flex-col items-center justify-center gap-0.5 py-2 transition-colors ${activeTab === t ? 'text-indigo-400' : 'text-slate-500 hover:text-slate-300'}">
+          <span class="text-lg leading-none">${tabIcon(t)}</span>
+          <span class="text-[10px] font-medium leading-none">${tabName(t)}</span>
+        </button>
+      `).join('')}
+    </nav>
   </div>
 
   ${showExpenseModal ? buildExpenseModal() : ''}
@@ -1998,13 +2054,33 @@ function renderDashboardCharts() {
   const cats = data.categories.filter(c => (byCategory[c.id]||0) > 0);
   const donutCtx = document.getElementById('donutChart');
   if (donutCtx) {
+    const donutTotal = cats.reduce((s, c) => s + (byCategory[c.id] || 0), 0);
+    const centerText = {
+      id: 'centerText',
+      afterDraw(chart) {
+        const { ctx, chartArea } = chart;
+        if (!chartArea) return;
+        const cx = (chartArea.left + chartArea.right) / 2;
+        const cy = (chartArea.top + chartArea.bottom) / 2;
+        ctx.save();
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#f1f5f9';
+        ctx.font = '700 18px Inter, sans-serif';
+        ctx.fillText(formatCurrency(donutTotal), cx, cy - 6);
+        ctx.fillStyle = '#64748b';
+        ctx.font = '500 11px Inter, sans-serif';
+        ctx.fillText('total', cx, cy + 13);
+        ctx.restore();
+      }
+    };
     chartInstances.donut = new Chart(donutCtx, {
       type: 'doughnut',
       data: {
         labels: cats.map(c => c.name),
         datasets: [{ data: cats.map(c => byCategory[c.id]||0), backgroundColor: cats.map(c => c.color), borderWidth: 2, borderColor: '#1e293b' }]
       },
-      options: { ...donutOpts(), plugins: { legend: { display: false } } }
+      options: { ...donutOpts(), plugins: { legend: { display: false } } },
+      plugins: [centerText]
     });
     const legend = document.getElementById('donutLegend');
     if (legend) {
@@ -2062,9 +2138,19 @@ function attachEvents() {
   if (mp) mp.addEventListener('change', e => { activeMonth = e.target.value; render(); });
 }
 
-function tabLabel(t) {
-  return { dashboard:'📊 Dashboard', expenses:'📋 Expenses', trips:'✈️ Trips', cards:'💳 Cards', income:'💵 Income', budgets:'🎯 Budgets', help:'📖 Guide', admin:'🔐 Admin' }[t] || t;
-}
+const TAB_META = {
+  help:     { icon: '📖', name: 'Guide' },
+  dashboard:{ icon: '📊', name: 'Dashboard' },
+  expenses: { icon: '📋', name: 'Expenses' },
+  income:   { icon: '💵', name: 'Income' },
+  budgets:  { icon: '🎯', name: 'Budgets' },
+  trips:    { icon: '✈️', name: 'Trips' },
+  cards:    { icon: '💳', name: 'Cards' },
+  admin:    { icon: '🔐', name: 'Admin' },
+};
+function tabLabel(t) { const m = TAB_META[t]; return m ? `${m.icon} ${m.name}` : t; }
+function tabIcon(t) { return (TAB_META[t] || {}).icon || '•'; }
+function tabName(t) { return (TAB_META[t] || {}).name || t; }
 function toggleMenu(event) { event.stopPropagation(); showMenu = !showMenu; render(); }
 function closeMenu() { showMenu = false; render(); }
 function toggleAccountMenu(event) { event.stopPropagation(); showAccountMenu = !showAccountMenu; render(); }
@@ -2179,10 +2265,10 @@ function deleteCustomKpi(id) {
   render();
 }
 
-function deleteDashboard() {
+async function deleteDashboard() {
   ensureDashboards();
   if (data.dashboards.length <= 1) { alert('You need at least one dashboard.'); return; }
-  if (!confirm('Delete this dashboard? (Your expenses and data are not affected.)')) return;
+  if (!(await showConfirm('Delete this dashboard? (Your expenses and data are not affected.)', { danger: true, confirmText: 'Delete' }))) return;
   data.dashboards = data.dashboards.filter(d => d.id !== data.activeDashboardId);
   data.activeDashboardId = data.dashboards[0].id;
   if (data.dashboards[0].period) dashPeriod = { ...data.dashboards[0].period };
@@ -2212,9 +2298,9 @@ function setSearchFilter(val) {
 function clearFilters() { expenseFilters = emptyFilters(); render(); }
 function toggleFilters() { filtersOpen = !filtersOpen; render(); }
 
-function resetAllData() {
-  if (!confirm('Reset ALL data? This permanently erases every expense, card, trip, payroll, dashboard and setting on this device. This cannot be undone.')) return;
-  if (!confirm('Are you absolutely sure? Tap Cancel if you have not exported a backup yet.')) return;
+async function resetAllData() {
+  if (!(await showConfirm('Reset ALL data? This permanently erases every expense, card, trip, payroll, dashboard and setting on this device. This cannot be undone.', { danger: true, confirmText: 'Reset everything' }))) return;
+  if (!(await showConfirm('Are you absolutely sure? Tap Cancel if you have not exported a backup yet.', { danger: true, confirmText: 'Yes, reset' }))) return;
   try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
   data = defaultData();
   activeTab = 'dashboard';
@@ -2342,8 +2428,8 @@ function saveExpense(andAnother) {
   }
 }
 
-function deleteExpense(id) {
-  if (!confirm('Delete this expense?')) return;
+async function deleteExpense(id) {
+  if (!(await showConfirm('Delete this expense?', { danger: true, confirmText: 'Delete' }))) return;
   data.expenses = data.expenses.filter(e => e.id !== id);
   saveData(data);
   render();
@@ -2394,8 +2480,8 @@ function saveCategory() {
   closeCategoryModal();
 }
 
-function deleteCategory(id) {
-  if (!confirm('Delete this category? Expenses using it will still be kept.')) return;
+async function deleteCategory(id) {
+  if (!(await showConfirm('Delete this category? Expenses using it will still be kept.', { danger: true, confirmText: 'Delete' }))) return;
   data.categories = data.categories.filter(c => c.id !== id);
   saveData(data);
   render();
@@ -2430,9 +2516,9 @@ function saveGroup() {
   closeGroupModal();
 }
 
-function deleteGroup(id) {
+async function deleteGroup(id) {
   const st = getGroupStats(id);
-  if (!confirm(`Delete this trip? Its ${st.count} expense${st.count===1?'':'s'} will be kept as regular expenses (still counted in your KPIs).`)) return;
+  if (!(await showConfirm(`Delete this trip? Its ${st.count} expense${st.count===1?'':'s'} will be kept as regular expenses (still counted in your KPIs).`, { danger: true, confirmText: 'Delete' }))) return;
   data.expenses.forEach(e => { if (e.groupId === id) e.groupId = null; });
   data.groups = data.groups.filter(g => g.id !== id);
   if (expenseFilters.groupId === id) expenseFilters.groupId = '';
@@ -2467,9 +2553,9 @@ function saveCard() {
   closeCardModal();
 }
 
-function deleteCard(id) {
+async function deleteCard(id) {
   const used = data.expenses.filter(e => e.cardId === id).length;
-  if (!confirm(`Delete this card? Its ${used} expense${used===1?'':'s'} will be kept (just no longer assigned to a card).`)) return;
+  if (!(await showConfirm(`Delete this card? Its ${used} expense${used===1?'':'s'} will be kept (just no longer assigned to a card).`, { danger: true, confirmText: 'Delete' }))) return;
   data.expenses.forEach(e => { if (e.cardId === id) e.cardId = null; });
   data.cards = data.cards.filter(c => c.id !== id);
   saveData(data);
@@ -2496,8 +2582,8 @@ function savePayroll() {
   closePayrollModal();
 }
 
-function deletePayroll(id) {
-  if (!confirm('Delete this payroll source?')) return;
+async function deletePayroll(id) {
+  if (!(await showConfirm('Delete this payroll source?', { danger: true, confirmText: 'Delete' }))) return;
   data.payrolls = data.payrolls.filter(p => p.id !== id);
   saveData(data);
   render();
@@ -2524,8 +2610,8 @@ function saveIncome() {
   closeIncomeModal();
 }
 
-function deleteIncome(id) {
-  if (!confirm('Delete this income entry?')) return;
+async function deleteIncome(id) {
+  if (!(await showConfirm('Delete this income entry?', { danger: true, confirmText: 'Delete' }))) return;
   data.oneTimeIncome = data.oneTimeIncome.filter(i => i.id !== id);
   saveData(data);
   render();
@@ -2566,12 +2652,12 @@ function toggleRecurring(id) {
   render();
 }
 
-function deleteRecurring(id) {
+async function deleteRecurring(id) {
   const generated = data.expenses.filter(e => e.recurringId === id).length;
   const msg = generated > 0
     ? `Delete this recurring rule? The ${generated} expense${generated===1?'':'s'} it already created will be KEPT. (Stops future ones.)`
     : 'Delete this recurring rule?';
-  if (!confirm(msg)) return;
+  if (!(await showConfirm(msg, { danger: true, confirmText: 'Delete' }))) return;
   data.recurringExpenses = data.recurringExpenses.filter(r => r.id !== id);
   saveData(data);
   render();
@@ -2595,12 +2681,12 @@ function importData(event) {
   const file = event.target.files && event.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
       const parsed = JSON.parse(reader.result);
       const incoming = parsed.data && parsed.data.expenses ? parsed.data : parsed; // accept wrapped or raw
       if (!incoming || !Array.isArray(incoming.expenses)) throw new Error('Not a valid Money Flies backup.');
-      if (!confirm('This will REPLACE all current data with the contents of the backup file. Continue?')) { event.target.value = ''; return; }
+      if (!(await showConfirm('This will REPLACE all current data with the contents of the backup file. Continue?', { danger: true, confirmText: 'Replace' }))) { event.target.value = ''; return; }
       data = incoming;
       // ensure required fields exist (reuse load-time defaults)
       if (!data.groups) data.groups = [];
@@ -2685,7 +2771,7 @@ async function doLogin() {
 }
 
 async function logout() {
-  if (!confirm('Sign out of Money Flies on this device?')) return;
+  if (!(await showConfirm('Sign out of Money Flies on this device?', { confirmText: 'Sign out' }))) return;
   try { await supa.auth.signOut(); } catch (e) {}
   currentUser = null;
   localStorage.removeItem(STORAGE_KEY); // clear cached data so the next user starts clean
@@ -2723,9 +2809,11 @@ async function loadFromCloud() {
 function saveToCloud(immediate) {
   if (!currentUser || !supa) return;
   if (currentUser.email) data.ownerEmail = currentUser.email; // so the admin view can identify users
+  setSyncState('saving');
   const doSave = () => supa.from('app_state')
     .upsert({ user_id: currentUser.id, data, updated_at: new Date().toISOString() })
-    .then(({ error }) => { if (error) console.warn('cloud save failed', error.message); });
+    .then(({ error }) => { setSyncState(error ? 'offline' : 'saved'); if (error) console.warn('cloud save failed', error.message); })
+    .catch(() => setSyncState('offline'));
   clearTimeout(cloudSaveTimer);
   if (immediate) return doSave();
   cloudSaveTimer = setTimeout(doSave, 800);
