@@ -529,7 +529,13 @@ function buildLayout() {
       </div>
       <div class="flex items-center gap-2">
         <span id="syncIndicator" class="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-400 mr-1">${syncIndicatorInner()}</span>
-        ${activeTab !== 'dashboard' ? `<input type="month" id="monthPicker" value="${activeMonth}" class="input-field rounded-lg px-3 py-1.5 text-sm" />` : ''}
+        ${activeTab !== 'dashboard' ? `
+          <div class="flex items-center gap-1" title="Displayed month">
+            <button onclick="shiftMonth(-1)" aria-label="Previous month" class="w-8 h-8 rounded-lg bg-slate-700/60 hover:bg-slate-600 text-slate-200 flex items-center justify-center text-lg leading-none transition-colors">‹</button>
+            <span class="text-slate-500 hidden sm:inline">📅</span>
+            <input type="month" id="monthPicker" value="${activeMonth}" class="input-field rounded-lg px-2 py-1.5 text-sm" />
+            <button onclick="shiftMonth(1)" aria-label="Next month" class="w-8 h-8 rounded-lg bg-slate-700/60 hover:bg-slate-600 text-slate-200 flex items-center justify-center text-lg leading-none transition-colors">›</button>
+          </div>` : ''}
         <button onclick="openExpenseModal()" class="btn-primary text-white rounded-lg px-3 sm:px-4 py-2 text-sm font-medium transition-all whitespace-nowrap">
           <span class="sm:hidden">＋</span><span class="hidden sm:inline">+ Add Expense</span>
         </button>
@@ -2157,6 +2163,12 @@ function toggleAccountMenu(event) { event.stopPropagation(); showAccountMenu = !
 function closeAccountMenu() { showAccountMenu = false; render(); }
 
 function switchTab(tab) { activeTab = tab; showMenu = false; render(); }
+function shiftMonth(delta) {
+  const [y, m] = activeMonth.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  activeMonth = d.toISOString().slice(0, 7);
+  render();
+}
 
 function setPreset(id) {
   const now = new Date();
