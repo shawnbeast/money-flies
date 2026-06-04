@@ -226,14 +226,8 @@ function expenseBase(e) {
   return toBase(e.origAmount != null ? e.origAmount : e.amount, e.currency || data.baseCurrency);
 }
 
-// Active dashboard scope (only applied while viewing the Dashboard tab).
-function currentScope() {
-  if (activeTab !== 'dashboard') return null;
-  const d = ensureDashboards();
-  const s = d.scope;
-  if (s && (s.groupId || s.cardId || s.categoryId)) return s;
-  return null;
-}
+// Dashboard scope filter is disabled for now (classic dashboard).
+function currentScope() { return null; }
 function applyScope(list) {
   const s = currentScope();
   if (!s) return list;
@@ -588,7 +582,6 @@ function buildPeriodBar() {
 
 // Available dashboard widgets (order here = default order).
 const DASHBOARD_WIDGETS = [
-  { id: 'customKpis',    label: 'My custom KPI tiles' },
   { id: 'kpis',          label: 'KPI cards (spent, earned, net…)' },
   { id: 'earnedVsSpent', label: 'Earned vs Spent bars' },
   { id: 'trend',         label: '6-Month Trend chart' },
@@ -867,23 +860,12 @@ function scopeLabel(s) {
 }
 
 function buildDashboardToolbar() {
-  const dash = ensureDashboards();
+  ensureDashboards();
   const r = periodRange();
   const presets = [['thisMonth','Month'],['lastMonth','Last'],['last3','3M'],['ytd','YTD']];
-  const scoped = scopeLabel(dash.scope);
   return `
-  <div class="card rounded-xl p-3 space-y-3">
-    <div class="flex items-center gap-2">
-      <div class="flex items-center gap-1.5 overflow-x-auto flex-1 scrollbar-thin">
-        ${data.dashboards.map(d => `
-          <button onclick="switchDashboard('${d.id}')" class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${d.id===data.activeDashboardId ? 'tab-active text-white' : 'bg-slate-700/60 text-slate-300 hover:bg-slate-600'}">${d.icon||'📊'} ${escapeHtml(d.name)}</button>
-        `).join('')}
-        <button onclick="createDashboard()" title="New dashboard" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-slate-800 text-slate-400 hover:text-white border border-dashed border-slate-600 transition-colors">＋</button>
-      </div>
-      <button onclick="openCustomizeModal()" title="Customize dashboard" class="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-slate-700/60 text-slate-300 hover:text-white hover:bg-slate-600 transition-colors">⚙️</button>
-    </div>
-    ${scoped ? `<div class="flex items-center gap-2 text-xs"><span class="px-2 py-1 rounded-full bg-indigo-500/20 text-indigo-300">🔎 Filtered: ${escapeHtml(scoped)}</span><button onclick="clearDashScope()" class="text-slate-400 hover:text-white">clear</button></div>` : ''}
-    <div class="flex items-center gap-2 flex-wrap border-t border-slate-700/50 pt-3">
+  <div class="card rounded-xl p-3">
+    <div class="flex items-center gap-2 flex-wrap">
       <div class="flex items-center gap-1">
         ${presets.map(([id,lbl]) => `
           <button onclick="setPreset('${id}')" class="px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${dashPeriod.preset===id ? 'tab-active text-white' : 'bg-slate-700/60 text-slate-300 hover:bg-slate-600'}">${lbl}</button>
@@ -893,6 +875,7 @@ function buildDashboardToolbar() {
         <input type="date" id="rangeStart" value="${r.start}" onchange="applyCustomRange()" class="input-field rounded-lg px-2 py-1 text-xs" />
         <span class="text-slate-500 text-xs">→</span>
         <input type="date" id="rangeEnd" value="${r.end}" onchange="applyCustomRange()" class="input-field rounded-lg px-2 py-1 text-xs" />
+        <button onclick="openCustomizeModal()" title="Customize dashboard" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-slate-700/60 text-slate-300 hover:text-white hover:bg-slate-600 transition-colors">⚙️</button>
       </div>
     </div>
   </div>`;
@@ -1974,7 +1957,6 @@ function buildRecurringModal() {
 
 function buildCustomizeModal() {
   const layout = getDashboardLayout();
-  const dash = ensureDashboards();
   return `
   <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
     <div class="card rounded-2xl w-full max-w-md p-6 space-y-4 max-h-[90vh] overflow-y-auto scrollbar-thin" onclick="event.stopPropagation()">
@@ -1982,74 +1964,7 @@ function buildCustomizeModal() {
         <h2 class="font-semibold text-lg">⚙️ Customize Dashboard</h2>
         <button onclick="closeCustomizeModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
       </div>
-      <div>
-        <label class="text-xs text-slate-400 uppercase tracking-wider">Name &amp; icon</label>
-        <div class="flex gap-2 mt-1">
-          <select onchange="setDashIcon(this.value)" class="input-field rounded-lg px-2 py-2.5 w-16 text-center">
-            ${['📊','✈️','🏠','💳','🍔','💰','🎯','📈','🛒','🎮','🏖️','🚗'].map(em => `<option value="${em}" ${dash.icon===em?'selected':''}>${em}</option>`).join('')}
-          </select>
-          <input id="dashName" type="text" value="${escapeHtml(dash.name)}" onchange="renameDashboard(this.value)"
-            class="input-field flex-1 rounded-lg px-3 py-2.5" />
-        </div>
-        <div class="flex gap-2 mt-2">
-          <button onclick="duplicateDashboard()" class="flex-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg py-2 text-xs font-medium transition-colors">⧉ Duplicate</button>
-          <button onclick="deleteDashboard()" ${data.dashboards.length<=1?'disabled':''}
-            class="flex-1 bg-slate-700 hover:bg-red-500/30 text-slate-300 hover:text-red-300 disabled:opacity-30 disabled:cursor-not-allowed rounded-lg py-2 text-xs font-medium transition-colors">🗑️ Delete</button>
-        </div>
-      </div>
-
-      <!-- Dashboard-wide filter (scope) -->
-      <div class="border-t border-slate-700/50 pt-3">
-        <label class="text-xs text-slate-400 uppercase tracking-wider">Filter whole dashboard (optional)</label>
-        <p class="text-[11px] text-slate-500 mt-0.5 mb-2">Every section will only show what matches. E.g. an “Italy” dashboard scoped to a trip.</p>
-        <div class="grid grid-cols-3 gap-2">
-          <select onchange="setDashScope('groupId', this.value)" class="input-field rounded-lg px-2 py-2 text-sm">
-            <option value="">Any trip</option>
-            ${data.groups.map(g => `<option value="${g.id}" ${dash.scope.groupId===g.id?'selected':''}>${g.icon} ${g.name}</option>`).join('')}
-          </select>
-          <select onchange="setDashScope('cardId', this.value)" class="input-field rounded-lg px-2 py-2 text-sm">
-            <option value="">Any card</option>
-            ${data.cards.map(c => `<option value="${c.id}" ${dash.scope.cardId===c.id?'selected':''}>${c.icon} ${c.name}</option>`).join('')}
-          </select>
-          <select onchange="setDashScope('categoryId', this.value)" class="input-field rounded-lg px-2 py-2 text-sm">
-            <option value="">Any category</option>
-            ${data.categories.map(c => `<option value="${c.id}" ${dash.scope.categoryId===c.id?'selected':''}>${c.icon} ${c.name}</option>`).join('')}
-          </select>
-        </div>
-      </div>
-
-      <!-- Custom KPI tiles -->
-      <div class="border-t border-slate-700/50 pt-3">
-        <label class="text-xs text-slate-400 uppercase tracking-wider">My custom KPI tiles</label>
-        <p class="text-[11px] text-slate-500 mt-0.5 mb-2">Create your own tiles (shown via the “My custom KPI tiles” section).</p>
-        <div class="space-y-1.5 mb-2">
-          ${dash.customKpis.length === 0 ? '<p class="text-xs text-slate-500">None yet.</p>' : dash.customKpis.map(t => `
-            <div class="flex items-center gap-2 bg-slate-800/60 rounded-lg px-3 py-2 text-sm">
-              <span class="flex-1 text-slate-200 truncate">${escapeHtml(t.label)} <span class="text-xs text-slate-500">(${t.metric==='count'?'count':'spent'}${t.categoryId?' · '+escapeHtml((getCategoryById(t.categoryId)||{}).name||''):''}${t.cardId?' · '+escapeHtml((getCardById(t.cardId)||{}).name||''):''})</span></span>
-              <button onclick="deleteCustomKpi('${t.id}')" class="text-slate-400 hover:text-red-400 text-sm">🗑️</button>
-            </div>`).join('')}
-        </div>
-        <div class="bg-slate-800/40 rounded-lg p-3 space-y-2">
-          <input id="ckpi_label" type="text" placeholder="Tile name (e.g. Food this month)" class="input-field w-full rounded-lg px-2 py-2 text-sm" />
-          <div class="grid grid-cols-3 gap-2">
-            <select id="ckpi_metric" class="input-field rounded-lg px-2 py-2 text-sm">
-              <option value="spent">Total spent</option>
-              <option value="count"># of expenses</option>
-            </select>
-            <select id="ckpi_cat" class="input-field rounded-lg px-2 py-2 text-sm">
-              <option value="">Any category</option>
-              ${data.categories.map(c => `<option value="${c.id}">${c.icon} ${c.name}</option>`).join('')}
-            </select>
-            <select id="ckpi_card" class="input-field rounded-lg px-2 py-2 text-sm">
-              <option value="">Any card</option>
-              ${data.cards.map(c => `<option value="${c.id}">${c.icon} ${c.name}</option>`).join('')}
-            </select>
-          </div>
-          <button onclick="addCustomKpi()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg py-2 text-sm font-medium transition-colors">+ Add tile</button>
-        </div>
-      </div>
-
-      <p class="text-xs text-slate-400 border-t border-slate-700/50 pt-3">Show/hide sections and reorder them.</p>
+      <p class="text-xs text-slate-400 -mt-1">Turn sections on/off and reorder them.</p>
       <div class="space-y-2">
         ${layout.map((w, i) => `
           <div class="flex items-center gap-3 bg-slate-800/60 rounded-lg px-3 py-2.5">
@@ -2057,9 +1972,10 @@ function buildCustomizeModal() {
               <button onclick="moveWidget('${w.id}',-1)" ${i===0?'disabled':''} class="text-slate-400 hover:text-white disabled:opacity-20 disabled:cursor-not-allowed text-xs leading-none">▲</button>
               <button onclick="moveWidget('${w.id}',1)" ${i===layout.length-1?'disabled':''} class="text-slate-400 hover:text-white disabled:opacity-20 disabled:cursor-not-allowed text-xs leading-none">▼</button>
             </div>
-            <span class="flex-1 text-sm ${w.visible?'text-slate-200':'text-slate-500 line-through'}">${widgetLabel(w.id)}</span>
-            <button onclick="toggleWidget('${w.id}')" class="px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${w.visible?'bg-indigo-600 text-white':'bg-slate-700 text-slate-400 hover:bg-slate-600'}">
-              ${w.visible ? '👁 Shown' : 'Hidden'}
+            <span class="flex-1 text-sm ${w.visible?'text-slate-200':'text-slate-500'}">${widgetLabel(w.id)}</span>
+            <button onclick="toggleWidget('${w.id}')" role="switch" aria-checked="${w.visible}" title="${w.visible?'On':'Off'}"
+              class="relative w-11 h-6 rounded-full flex-shrink-0 transition-colors ${w.visible?'bg-green-500':'bg-slate-600'}">
+              <span class="absolute top-0.5 ${w.visible?'left-[22px]':'left-0.5'} w-5 h-5 bg-white rounded-full shadow transition-all"></span>
             </button>
           </div>`).join('')}
       </div>
