@@ -450,8 +450,7 @@ function buildLayout() {
           ${showAccountMenu ? `
             <div class="absolute right-0 mt-1 w-56 card rounded-xl shadow-xl border border-slate-600 py-1 z-40">
               ${(currentUser && currentUser.email) ? `<div class="px-4 py-2 text-xs text-slate-500 border-b border-slate-700/50 truncate">Signed in as<br><span class="text-slate-300">${escapeHtml(currentUser.email)}</span></div>` : ''}
-              <button onclick="closeAccountMenu(); switchTab('help')" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">❓ Guide / Help</button>
-              <button onclick="exportData(); closeAccountMenu()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors border-t border-slate-700/50">⬇️ Export backup</button>
+              <button onclick="exportData(); closeAccountMenu()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">⬇️ Export backup</button>
               <button onclick="closeAccountMenu(); document.getElementById('importFile').click()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">⬆️ Import backup</button>
               ${(currentUser && !currentUser.local) ? `<button onclick="logout()" class="w-full text-left px-4 py-2.5 text-sm text-red-300 hover:bg-red-500/10 border-t border-slate-700/50 transition-colors">⎋ Sign out</button>` : ''}
             </div>` : ''}
@@ -1506,6 +1505,10 @@ function buildBudgets() {
 function buildExpenseModal() {
   const e = editingExpense;
   const today = new Date().toISOString().slice(0, 10);
+  // For a NEW expense, pre-select the last category/card you used (faster repeat entry on mobile).
+  const lastExp = data.expenses.length ? data.expenses[data.expenses.length - 1] : null;
+  const defCat = e ? e.categoryId : (lastExp ? lastExp.categoryId : (data.categories[0] && data.categories[0].id));
+  const defCard = e ? (e.cardId || '') : (lastExp ? (lastExp.cardId || '') : '');
   return `
   <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
     <div class="card rounded-2xl w-full max-w-md p-6 space-y-4" onclick="event.stopPropagation()">
@@ -1523,7 +1526,7 @@ function buildExpenseModal() {
           <div>
             <label class="text-xs text-slate-400 uppercase tracking-wider">Amount *</label>
             <div class="flex gap-2 mt-1">
-              <input id="exp_amount" type="number" min="0.01" step="0.01" placeholder="0.00" value="${e ? (e.origAmount != null ? e.origAmount : e.amount) : ''}"
+              <input id="exp_amount" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="0.00" value="${e ? (e.origAmount != null ? e.origAmount : e.amount) : ''}"
                 oninput="updateConvertPreview()"
                 class="input-field w-full rounded-lg px-3 py-2.5" />
               <select id="exp_currency" onchange="updateConvertPreview()" class="input-field rounded-lg px-2 py-2.5 w-24">
@@ -1541,14 +1544,14 @@ function buildExpenseModal() {
         <div>
           <label class="text-xs text-slate-400 uppercase tracking-wider">Category *</label>
           <select id="exp_cat" class="input-field w-full rounded-lg px-3 py-2.5 mt-1">
-            ${data.categories.map(c => `<option value="${c.id}" ${e?.categoryId===c.id?'selected':''}>${c.icon} ${c.name}</option>`).join('')}
+            ${data.categories.map(c => `<option value="${c.id}" ${defCat===c.id?'selected':''}>${c.icon} ${c.name}</option>`).join('')}
           </select>
         </div>
         <div>
           <label class="text-xs text-slate-400 uppercase tracking-wider">Paid with (card)</label>
           <select id="exp_card" class="input-field w-full rounded-lg px-3 py-2.5 mt-1">
             <option value="">— Not specified —</option>
-            ${data.cards.map(c => `<option value="${c.id}" ${e?.cardId===c.id?'selected':''}>${c.icon} ${c.name}${c.last4?' ••'+c.last4:''}</option>`).join('')}
+            ${data.cards.map(c => `<option value="${c.id}" ${defCard===c.id?'selected':''}>${c.icon} ${c.name}${c.last4?' ••'+c.last4:''}</option>`).join('')}
           </select>
         </div>
         <div>
@@ -1736,7 +1739,7 @@ function buildPayrollModal() {
           <div>
             <label class="text-xs text-slate-400 uppercase tracking-wider">Amount per pay *</label>
             <div class="flex gap-1 mt-1">
-              <input id="pay_amount" type="number" min="0" step="50" placeholder="0.00" value="${p?.amount||''}"
+              <input id="pay_amount" type="number" inputmode="decimal" min="0" step="50" placeholder="0.00" value="${p?.amount||''}"
                 class="input-field w-full rounded-lg px-3 py-2.5" />
               <select id="pay_currency" class="input-field rounded-lg px-1 py-2.5 w-20">
                 ${Object.keys(CURRENCIES).map(cc => `<option value="${cc}" ${(p?.currency||data.baseCurrency)===cc?'selected':''}>${cc}</option>`).join('')}
@@ -1784,7 +1787,7 @@ function buildIncomeModal() {
           <div>
             <label class="text-xs text-slate-400 uppercase tracking-wider">Amount *</label>
             <div class="flex gap-1 mt-1">
-              <input id="inc_amount" type="number" min="0" step="0.01" placeholder="0.00" value="${i ? i.amount : ''}"
+              <input id="inc_amount" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0.00" value="${i ? i.amount : ''}"
                 class="input-field w-full rounded-lg px-3 py-2.5" />
               <select id="inc_currency" class="input-field rounded-lg px-1 py-2.5 w-20">
                 ${Object.keys(CURRENCIES).map(cc => `<option value="${cc}" ${(i?.currency||data.baseCurrency)===cc?'selected':''}>${cc}</option>`).join('')}
@@ -2154,7 +2157,10 @@ function setFilterDates(preset) {
 function openExpenseModal(id) {
   editingExpense = id ? data.expenses.find(e => e.id === id) : null;
   showExpenseModal = true;
+  showMenu = false; showAccountMenu = false;
   render();
+  // Focus the description field so the keyboard pops right away (mobile-friendly).
+  setTimeout(() => { const el = document.getElementById('exp_desc'); if (el) el.focus(); }, 60);
 }
 
 function closeExpenseModal() { showExpenseModal = false; editingExpense = null; render(); }
