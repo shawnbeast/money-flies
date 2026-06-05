@@ -472,6 +472,33 @@ function getLast6Months() {
   return months;
 }
 
+// Least-squares linear fit over y values at x = 0..n-1 → { a (intercept), b (slope) }.
+function linReg(ys) {
+  const n = ys.length; if (!n) return { a: 0, b: 0 };
+  let sx = 0, sy = 0, sxy = 0, sxx = 0;
+  ys.forEach((y, x) => { sx += x; sy += y; sxy += x * y; sxx += x * x; });
+  const denom = n * sxx - sx * sx;
+  const b = denom ? (n * sxy - sx * sy) / denom : 0;
+  const a = (sy - b * sx) / n;
+  return { a, b };
+}
+
+// Project the next 6 months of spending from the last 6 months' trend.
+function computeForecast() {
+  const past = getLast6Months();
+  const actual = past.map(m => getMonthTotals(m).total);
+  const { a, b } = linReg(actual);
+  const now = new Date();
+  const future = [], fvals = [];
+  for (let k = 1; k <= 6; k++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + k, 1);
+    future.push(d.toISOString().slice(0, 7));
+    fvals.push(Math.max(0, a + b * (5 + k)));
+  }
+  const projTotal = fvals.reduce((s, v) => s + v, 0);
+  return { past, actual, future, fvals, projTotal, projAvg: projTotal / 6, slope: b, hasData: actual.some(v => v > 0) };
+}
+
 function monthLabel(m) {
   const [y, mo] = m.split('-');
   return new Date(y, mo - 1, 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
@@ -689,6 +716,7 @@ function buildPeriodBar() {
 const DASHBOARD_WIDGETS = [
   { id: 'insights',      label: '💡 Smart insights' },
   { id: 'kpis',          label: 'KPI cards (spent, earned…)' },
+  { id: 'forecast',      label: '🔮 Forecast — next 6 months' },
   { id: 'trend',         label: '6-Month Trend chart' },
   { id: 'donut',         label: 'Category Breakdown (donut)' },
   { id: 'budgetBars',    label: 'Budget vs Actual + category %' },
@@ -804,6 +832,26 @@ function buildDashboard() {
         ${kpiCard('Remaining Budget', countUp(remaining), remaining < 0 ? '⚠️ Over budget' : 'Available to spend', remaining < 0 ? '#ef4444' : '#22c55e', '🎯')}
         ${kpiCard('Daily Average', countUp(dailyAvg), `over ${days} day${days===1?'':'s'}`, '#06b6d4', '📅')}
       </div>`,
+
+    forecast: () => {
+      const f = computeForecast();
+      if (!f.hasData) return `
+        <div class="card rounded-xl p-5">
+          <h3 class="font-semibold text-slate-200 mb-2">🔮 Forecast — next 6 months</h3>
+          ${emptyState('🔮', 'Not enough history yet', 'Log expenses over a couple of months and a projection will appear here.')}
+        </div>`;
+      const trendTxt = f.slope > 1 ? '📈 trending up' : f.slope < -1 ? '📉 trending down' : '➡️ stable';
+      return `
+      <div class="card rounded-xl p-5">
+        <h3 class="font-semibold text-slate-200 mb-4">🔮 Forecast — next 6 months</h3>
+        <div class="grid grid-cols-2 gap-4 mb-4">
+          ${kpiCard('Projected (6 mo)', countUp(f.projTotal), trendTxt, '#a855f7', '🔮')}
+          ${kpiCard('Avg / month', countUp(f.projAvg), 'expected spend', '#06b6d4', '📅')}
+        </div>
+        <canvas id="forecastChart" height="150"></canvas>
+        <p class="text-xs text-slate-500 mt-2">Estimate from your last 6 months' trend. Solid = actual, lighter = forecast.</p>
+      </div>`;
+    },
 
     trend: () => `
       <div class="card rounded-xl p-5">
@@ -2142,8 +2190,23 @@ function buildThemeModal() {
 // ─── Chart rendering ──────────────────────────────────────────────────────────
 function renderCharts() {
   destroyCharts();
-  if (activeTab === 'dashboard') { renderDashboardCharts(); renderAnalyticsCharts(); }
+  if (activeTab === 'dashboard') { renderDashboardCharts(); renderAnalyticsCharts(); renderForecastChart(); }
   if (activeTab === 'cards') renderCardChart();
+}
+
+function renderForecastChart() {
+  const ctx = document.getElementById('forecastChart');
+  if (!ctx) return;
+  const f = computeForecast();
+  const labels = [...f.past, ...f.future].map(monthLabel);
+  const values = [...f.actual, ...f.fvals];
+  const accent = (getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()) || '#6366f1';
+  const colors = values.map((v, i) => i < 6 ? accent : accent + '59'); // future = translucent
+  chartInstances.forecast = new Chart(ctx, {
+    type: 'bar',
+    data: { labels, datasets: [{ data: values, backgroundColor: colors, borderRadius: 5, maxBarThickness: 40 }] },
+    options: { ...chartOpts(), plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1e293b', borderColor: '#334155', borderWidth: 1, titleColor: '#f1f5f9', bodyColor: '#94a3b8', callbacks: { label: c => (c.dataIndex < 6 ? ' Actual ' : ' Forecast ') + formatCurrency(c.parsed.y) } } } }
+  });
 }
 
 function renderCardChart() {
