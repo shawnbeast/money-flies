@@ -1125,6 +1125,14 @@ function recentAvgSpend() {
   const sum = last3.reduce((s, m) => s + getMonthTotals(m).total, 0);
   return sum / 3;
 }
+function recentAvgByCategory() {
+  const last3 = getLast6Months().slice(3);
+  const map = {};
+  data.categories.forEach(c => { map[c.id] = 0; });
+  last3.forEach(m => { const bc = getMonthTotals(m).byCategory; Object.keys(bc).forEach(id => { map[id] = (map[id] || 0) + bc[id]; }); });
+  Object.keys(map).forEach(id => { map[id] /= 3; });
+  return map;
+}
 
 function planResultHTML(goal, months, income) {
   goal = Math.max(0, Number(goal) || 0);
@@ -1164,7 +1172,45 @@ function planResultHTML(goal, months, income) {
     <div class="card rounded-xl p-4 mt-3" style="border-color:${verdict.c}66">
       <p class="text-sm" style="color:${verdict.c}">${verdict.t}</p>
     </div>
-    <p class="text-xs text-slate-400 mt-3">💡 ${paceTxt}</p>`;
+    <p class="text-xs text-slate-400 mt-3">💡 ${paceTxt}</p>
+    ${categoryPlanHTML(maxSpend)}`;
+}
+
+// Split the monthly spending cap across categories (based on recent habits, or budgets as fallback).
+function categoryPlanHTML(maxSpend) {
+  if (maxSpend <= 0) {
+    return `<div class="card rounded-xl p-4 mt-3"><p class="text-sm text-slate-400">No room to allocate — your goal needs all (or more than) your income. Extend the timeline to see a per-category budget.</p></div>`;
+  }
+  const avgMap = recentAvgByCategory();
+  let basis = data.categories.map(c => ({ c, basis: avgMap[c.id] || 0, now: avgMap[c.id] || 0 }));
+  let totalBasis = basis.reduce((s, x) => s + x.basis, 0);
+  let usingBudgets = false;
+  if (totalBasis <= 0) { // no spending history → use category budgets
+    basis = data.categories.map(c => ({ c, basis: c.budget || 0, now: 0 }));
+    totalBasis = basis.reduce((s, x) => s + x.basis, 0);
+    usingBudgets = true;
+  }
+  if (totalBasis <= 0) return ''; // nothing to base it on
+  const rows = basis.filter(x => x.basis > 0).sort((a, b) => b.basis - a.basis).map(x => {
+    const suggested = maxSpend * (x.basis / totalBasis);
+    const pct = (suggested / maxSpend) * 100;
+    const cut = !usingBudgets && x.now > suggested + 0.5;
+    return `
+      <div>
+        <div class="flex justify-between items-center mb-1">
+          <span class="text-sm text-slate-300">${x.c.icon} ${x.c.name}</span>
+          <span class="text-sm font-semibold text-slate-100">${formatCurrency(suggested)}<span class="text-xs text-slate-500 font-normal">/mo</span></span>
+        </div>
+        <div class="progress-bar h-2"><div style="width:${pct}%;background:${x.c.color}" class="h-full rounded-full"></div></div>
+        ${!usingBudgets ? `<p class="text-[11px] mt-0.5 ${cut ? 'text-amber-400' : 'text-slate-500'}">${cut ? `↓ cut from ${formatCurrency(x.now)}/mo` : `now ~${formatCurrency(x.now)}/mo`}</p>` : ''}
+      </div>`;
+  }).join('');
+  return `
+  <div class="card rounded-xl p-5 mt-3">
+    <h3 class="font-semibold text-slate-200 mb-1">Suggested monthly budget by category</h3>
+    <p class="text-[11px] text-slate-500 mb-3">Based on ${usingBudgets ? 'your category budgets' : 'your recent spending mix'} — scaled to your ${formatCurrency(maxSpend)}/mo cap.</p>
+    <div class="space-y-3">${rows}</div>
+  </div>`;
 }
 
 function updatePlanner() {
