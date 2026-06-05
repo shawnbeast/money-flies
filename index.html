@@ -568,7 +568,7 @@ function render() {
   attachEvents();
   const doAnim = _animate;
   // Defer charts one frame so the UI paints instantly, then charts fill in.
-  requestAnimationFrame(() => { renderCharts(); if (doAnim) animateCounters(); });
+  requestAnimationFrame(() => { renderCharts(); if (doAnim) animateCounters(); if (activeTab === 'planner') updatePlanRemaining(); });
   _animate = false;
 }
 
@@ -1176,41 +1176,58 @@ function planResultHTML(goal, months, income) {
     ${categoryPlanHTML(maxSpend)}`;
 }
 
-// Split the monthly spending cap across categories (based on recent habits, or budgets as fallback).
+// Split the monthly spending cap across categories — editable, with a live "left to allocate" counter.
+let _planCap = 0;
 function categoryPlanHTML(maxSpend) {
+  _planCap = maxSpend;
   if (maxSpend <= 0) {
     return `<div class="card rounded-xl p-4 mt-3"><p class="text-sm text-slate-400">No room to allocate — your goal needs all (or more than) your income. Extend the timeline to see a per-category budget.</p></div>`;
   }
   const avgMap = recentAvgByCategory();
-  let basis = data.categories.map(c => ({ c, basis: avgMap[c.id] || 0, now: avgMap[c.id] || 0 }));
-  let totalBasis = basis.reduce((s, x) => s + x.basis, 0);
+  let totalBasis = data.categories.reduce((s, c) => s + (avgMap[c.id] || 0), 0);
   let usingBudgets = false;
-  if (totalBasis <= 0) { // no spending history → use category budgets
-    basis = data.categories.map(c => ({ c, basis: c.budget || 0, now: 0 }));
-    totalBasis = basis.reduce((s, x) => s + x.basis, 0);
-    usingBudgets = true;
-  }
-  if (totalBasis <= 0) return ''; // nothing to base it on
-  const rows = basis.filter(x => x.basis > 0).sort((a, b) => b.basis - a.basis).map(x => {
-    const suggested = maxSpend * (x.basis / totalBasis);
-    const pct = (suggested / maxSpend) * 100;
-    const cut = !usingBudgets && x.now > suggested + 0.5;
+  if (totalBasis <= 0) { totalBasis = data.categories.reduce((s, c) => s + (c.budget || 0), 0); usingBudgets = true; }
+  const basisOf = c => usingBudgets ? (c.budget || 0) : (avgMap[c.id] || 0);
+  const rows = data.categories.slice().sort((a, b) => basisOf(b) - basisOf(a)).map(c => {
+    const suggested = totalBasis > 0 ? Math.round(maxSpend * (basisOf(c) / totalBasis)) : 0;
+    const now = avgMap[c.id] || 0;
     return `
-      <div>
-        <div class="flex justify-between items-center mb-1">
-          <span class="text-sm text-slate-300">${x.c.icon} ${x.c.name}</span>
-          <span class="text-sm font-semibold text-slate-100">${formatCurrency(suggested)}<span class="text-xs text-slate-500 font-normal">/mo</span></span>
+      <div class="flex items-center gap-3">
+        <span class="text-lg flex-shrink-0">${c.icon}</span>
+        <div class="flex-1 min-w-0">
+          <p class="text-sm text-slate-300 truncate">${c.name}</p>
+          ${now > 0 ? `<p class="text-[11px] text-slate-500">now ~${formatCurrency(now)}/mo</p>` : ''}
         </div>
-        <div class="progress-bar h-2"><div style="width:${pct}%;background:${x.c.color}" class="h-full rounded-full"></div></div>
-        ${!usingBudgets ? `<p class="text-[11px] mt-0.5 ${cut ? 'text-amber-400' : 'text-slate-500'}">${cut ? `↓ cut from ${formatCurrency(x.now)}/mo` : `now ~${formatCurrency(x.now)}/mo`}</p>` : ''}
+        <div class="flex items-center gap-1 flex-shrink-0">
+          <span class="text-slate-500 text-sm">${(CURRENCIES[data.baseCurrency]||{}).symbol||''}</span>
+          <input type="number" inputmode="decimal" min="0" value="${suggested}" data-alloc="1"
+            oninput="updatePlanRemaining()" class="input-field rounded-lg px-2 py-1.5 w-24 text-right text-sm" />
+        </div>
       </div>`;
   }).join('');
   return `
   <div class="card rounded-xl p-5 mt-3">
-    <h3 class="font-semibold text-slate-200 mb-1">Suggested monthly budget by category</h3>
-    <p class="text-[11px] text-slate-500 mb-3">Based on ${usingBudgets ? 'your category budgets' : 'your recent spending mix'} — scaled to your ${formatCurrency(maxSpend)}/mo cap.</p>
+    <div class="flex items-center justify-between mb-1">
+      <h3 class="font-semibold text-slate-200">Monthly budget by category</h3>
+      <button onclick="openCategoryModal()" class="text-xs bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg px-2.5 py-1 transition-colors">+ Category</button>
+    </div>
+    <p class="text-[11px] text-slate-500 mb-3">Pre-filled from ${usingBudgets ? 'your category budgets' : 'your recent spending'} — edit any value. Cap: ${formatCurrency(maxSpend)}/mo.</p>
     <div class="space-y-3">${rows}</div>
+    <div id="planRemaining" class="mt-4 pt-3 border-t border-slate-700 flex justify-between items-center text-sm"></div>
   </div>`;
+}
+
+function updatePlanRemaining() {
+  const el = document.getElementById('planRemaining'); if (!el) return;
+  let sum = 0;
+  document.querySelectorAll('[data-alloc="1"]').forEach(i => { sum += parseFloat(i.value) || 0; });
+  const left = _planCap - sum;
+  const over = left < -0.5;
+  el.innerHTML = `
+    <span class="text-slate-400">Allocated ${formatCurrency(sum)} of ${formatCurrency(_planCap)}</span>
+    <span class="font-semibold ${over ? 'text-red-400' : (Math.abs(left) < 0.5 ? 'text-emerald-400' : 'text-amber-400')}">
+      ${over ? formatCurrency(-left) + ' over' : formatCurrency(left) + ' left to place'}
+    </span>`;
 }
 
 function updatePlanner() {
@@ -1219,6 +1236,7 @@ function updatePlanner() {
   const m = document.getElementById('plan_months').value;
   const i = document.getElementById('plan_income').value;
   el.innerHTML = planResultHTML(g, m, i);
+  updatePlanRemaining();
 }
 
 function buildPlanner() {
