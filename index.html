@@ -599,7 +599,7 @@ function animateCounters() {
 function isAdminUser() { return !!(currentUser && currentUser.email === ADMIN_EMAIL); }
 
 function buildLayout() {
-  const mainTabs = ['help','dashboard','expenses','income','budgets','trips','cards'].concat(isAdminUser() ? ['admin'] : []);
+  const mainTabs = ['help','dashboard','expenses','income','budgets','trips','cards'].concat(isAdminUser() ? ['planner','admin'] : []);
   return `
   <div class="flex flex-col min-h-screen">
     <!-- Header -->
@@ -653,6 +653,7 @@ function buildLayout() {
       ${activeTab === 'income' ? buildIncome() : ''}
       ${activeTab === 'budgets' ? buildBudgets() : ''}
       ${activeTab === 'help' ? buildHelp() : ''}
+      ${activeTab === 'planner' ? buildPlanner() : ''}
       ${activeTab === 'admin' ? buildAdmin() : ''}
     </main>
 
@@ -1115,6 +1116,89 @@ function buildHelp() {
     <div class="text-center">
       <button onclick="switchTab('dashboard')" class="btn-primary text-white rounded-lg px-5 py-2.5 text-sm font-medium">Got it — go to my dashboard</button>
     </div>
+  </div>`;
+}
+
+// ─── Planner / Goal calculator (owner only) ────────────────────────────────────
+function recentAvgSpend() {
+  const last3 = getLast6Months().slice(3); // most recent 3 months
+  const sum = last3.reduce((s, m) => s + getMonthTotals(m).total, 0);
+  return sum / 3;
+}
+
+function planResultHTML(goal, months, income) {
+  goal = Math.max(0, Number(goal) || 0);
+  months = Math.max(1, Number(months) || 1);
+  income = Math.max(0, Number(income) || 0);
+  const reqMonthly = goal / months;
+  const maxSpend = income - reqMonthly;
+  const rate = income > 0 ? (reqMonthly / income) * 100 : 0;
+  const avg = recentAvgSpend();
+  const pace = income - avg;
+
+  let verdict;
+  if (reqMonthly > income) {
+    verdict = { c: '#ef4444', t: `❌ Out of reach with this income. You'd need to save ${formatCurrency(reqMonthly)}/mo but only earn ${formatCurrency(income)}/mo. Extend the timeline or raise income.` };
+  } else if (avg > 0 && maxSpend < avg) {
+    verdict = { c: '#f59e0b', t: `⚠️ Tight. You'd have to cap spending at ${formatCurrency(maxSpend)}/mo — that's ${formatCurrency(avg - maxSpend)}/mo less than your recent ${formatCurrency(avg)}/mo.` };
+  } else {
+    verdict = { c: '#22c55e', t: `✅ Achievable. You can spend up to ${formatCurrency(maxSpend)}/mo and still hit ${formatCurrency(goal)} in ${months} month${months > 1 ? 's' : ''}.` };
+  }
+  const paceTxt = pace > 0
+    ? `At your recent pace (saving ~${formatCurrency(pace)}/mo) you'd reach ${formatCurrency(goal)} in about <b>${Math.ceil(goal / pace)} month${Math.ceil(goal / pace) > 1 ? 's' : ''}</b>.`
+    : `At your recent pace you're not saving — you'd need to cut spending to reach this goal.`;
+
+  const stat = (lbl, val, color) => `
+    <div class="card rounded-xl p-4 text-center">
+      <p class="text-xs text-slate-400 uppercase tracking-wider">${lbl}</p>
+      <p class="text-xl font-bold mt-1" style="color:${color}">${val}</p>
+    </div>`;
+
+  return `
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      ${stat('Save / month', formatCurrency(reqMonthly), '#22c55e')}
+      ${stat('Max spend / month', maxSpend < 0 ? '—' : formatCurrency(maxSpend), maxSpend < 0 ? '#ef4444' : '#06b6d4')}
+      ${stat('Required savings rate', rate.toFixed(0) + '%', '#a855f7')}
+      ${stat('Your recent avg spend', formatCurrency(avg), '#f59e0b')}
+    </div>
+    <div class="card rounded-xl p-4 mt-3" style="border-color:${verdict.c}66">
+      <p class="text-sm" style="color:${verdict.c}">${verdict.t}</p>
+    </div>
+    <p class="text-xs text-slate-400 mt-3">💡 ${paceTxt}</p>`;
+}
+
+function updatePlanner() {
+  const el = document.getElementById('plannerResult'); if (!el) return;
+  const g = document.getElementById('plan_goal').value;
+  const m = document.getElementById('plan_months').value;
+  const i = document.getElementById('plan_income').value;
+  el.innerHTML = planResultHTML(g, m, i);
+}
+
+function buildPlanner() {
+  const income = Math.round(totalMonthlyIncome());
+  const goal = 10000, months = 2;
+  return `
+  <div class="space-y-5 max-w-3xl mx-auto">
+    <div class="card rounded-xl p-5">
+      <h2 class="font-semibold text-lg text-slate-100">🧮 Savings Goal Planner</h2>
+      <p class="text-sm text-slate-400 mt-1">Set a target and see the budget you'd need to hit it.</p>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Goal amount</label>
+          <input id="plan_goal" type="number" inputmode="decimal" value="${goal}" oninput="updatePlanner()" class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">In how many months</label>
+          <input id="plan_months" type="number" inputmode="numeric" min="1" value="${months}" oninput="updatePlanner()" class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 uppercase tracking-wider">Monthly income</label>
+          <input id="plan_income" type="number" inputmode="decimal" value="${income}" oninput="updatePlanner()" class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
+        </div>
+      </div>
+    </div>
+    <div id="plannerResult">${planResultHTML(goal, months, income)}</div>
   </div>`;
 }
 
@@ -2367,6 +2451,7 @@ const TAB_META = {
   budgets:  { icon: '🎯', name: 'Budgets' },
   trips:    { icon: '✈️', name: 'Trips' },
   cards:    { icon: '💳', name: 'Cards' },
+  planner:  { icon: '🧮', name: 'Planner' },
   admin:    { icon: '🔐', name: 'Admin' },
 };
 function tabLabel(t) { const m = TAB_META[t]; return m ? `${m.icon} ${m.name}` : t; }
