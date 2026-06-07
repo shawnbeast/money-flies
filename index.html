@@ -214,6 +214,8 @@ let adminData = null, adminLoading = false, adminError = null; // admin view cac
 function emptyFilters() { return { search: '', categoryId: '', cardId: '', groupId: '', start: '', end: '', min: '', max: '' }; }
 let expenseFilters = emptyFilters();
 let filtersOpen = false; // advanced filter panel expanded
+let selectMode = false; // bulk-select mode in Expenses
+let selectedIds = new Set(); // selected expense ids for bulk actions
 // Dashboard time-period filter (independent of the header month picker).
 let dashPeriod = { mode: 'month', preset: 'thisMonth', month: new Date().toISOString().slice(0, 7), start: null, end: null };
 let chartInstances = {};
@@ -1428,10 +1430,24 @@ function buildExpenses() {
 
     <!-- Results -->
     <div class="card rounded-xl overflow-hidden">
-    <div class="px-5 py-4 border-b border-slate-700 flex items-center justify-between">
+    <div class="px-5 py-4 border-b border-slate-700 flex items-center justify-between gap-2">
       <h3 class="font-semibold text-slate-200">${exps.length} ${exps.length===1?'expense':'expenses'}${activeCount?' (filtered)':''}</h3>
-      <button onclick="openExpenseModal()" class="btn-primary text-white rounded-lg px-3 py-1.5 text-sm font-medium">+ Add</button>
+      <div class="flex gap-2">
+        ${exps.length ? `<button onclick="toggleSelectMode()" class="rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${selectMode?'tab-active text-white':'bg-slate-700 text-slate-300 hover:bg-slate-600'}">${selectMode?'Done':'Select'}</button>` : ''}
+        <button onclick="openExpenseModal()" class="btn-primary text-white rounded-lg px-3 py-1.5 text-sm font-medium">+ Add</button>
+      </div>
     </div>
+    ${selectMode ? `
+      <div class="px-5 py-3 bg-slate-800/60 border-b border-slate-700 flex flex-wrap items-center gap-2">
+        <label class="text-xs text-slate-300 flex items-center gap-1.5"><input type="checkbox" onchange="toggleSelectAll(this.checked)" ${exps.length && exps.every(e=>selectedIds.has(e.id))?'checked':''} class="w-4 h-4 accent-indigo-500" /> All</label>
+        <span class="text-sm font-medium text-slate-200">${selectedIds.size} selected</span>
+        <div class="flex gap-2 ml-auto flex-wrap">
+          <select onchange="bulkSetCategory(this.value)" class="input-field rounded-lg px-2 py-1.5 text-sm"><option value="">Category…</option>${data.categories.map(c=>`<option value="${c.id}">${c.icon} ${c.name}</option>`).join('')}</select>
+          <select onchange="bulkSetField('groupId', this.value)" class="input-field rounded-lg px-2 py-1.5 text-sm"><option value="">Trip…</option><option value="__none__">— None —</option>${data.groups.map(g=>`<option value="${g.id}">${g.icon} ${g.name}</option>`).join('')}</select>
+          <select onchange="bulkSetField('cardId', this.value)" class="input-field rounded-lg px-2 py-1.5 text-sm"><option value="">Card…</option><option value="__none__">— None —</option>${data.cards.map(c=>`<option value="${c.id}">${c.icon} ${c.name}</option>`).join('')}</select>
+          <button onclick="bulkDelete()" class="bg-slate-700 hover:bg-red-500/30 text-slate-300 hover:text-red-300 rounded-lg px-2.5 py-1.5 text-sm">🗑️</button>
+        </div>
+      </div>` : ''}
     ${exps.length === 0 ? `
       <div class="py-16 text-center text-slate-500">
         <div class="text-4xl mb-3">🧾</div>
@@ -1442,8 +1458,10 @@ function buildExpenses() {
     `<div class="divide-y divide-slate-700/50">
       ${exps.map(e => {
         const cat = getCategoryById(e.categoryId);
+        const sel = selectedIds.has(e.id);
         return `
-        <div class="flex items-center gap-4 px-5 py-3.5 hover:bg-slate-700/30 transition-colors">
+        <div class="flex items-center gap-4 px-5 py-3.5 transition-colors ${selectMode ? 'cursor-pointer ' + (sel ? 'bg-indigo-500/10' : 'hover:bg-slate-700/30') : 'hover:bg-slate-700/30'}" ${selectMode ? `onclick="toggleSelectExpense('${e.id}')"` : ''}>
+          ${selectMode ? `<input type="checkbox" ${sel?'checked':''} class="w-4 h-4 accent-indigo-500 flex-shrink-0 pointer-events-none" />` : ''}
           <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0" style="background:${cat.color}22">${cat.icon}</div>
           <div class="flex-1 min-w-0">
             <p class="font-medium text-slate-200 truncate">${e.description}</p>
@@ -1456,10 +1474,10 @@ function buildExpenses() {
             <p class="font-semibold text-red-400">${formatCurrency(expenseBase(e))}</p>
             ${(e.currency && e.currency !== data.baseCurrency) ? `<p class="text-xs text-slate-500">${formatCurrency(e.origAmount != null ? e.origAmount : e.amount, e.currency)} ${e.currency}</p>` : ''}
           </div>
-          <div class="flex gap-1 flex-shrink-0">
+          ${selectMode ? '' : `<div class="flex gap-1 flex-shrink-0">
             <button onclick="openExpenseModal('${e.id}')" class="p-1.5 rounded-lg hover:bg-slate-600 text-slate-400 hover:text-white transition-colors text-sm">✏️</button>
             <button onclick="deleteExpense('${e.id}')" class="p-1.5 rounded-lg hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-colors text-sm">🗑️</button>
-          </div>
+          </div>`}
         </div>`;
       }).join('')}
     </div>
@@ -2639,7 +2657,7 @@ function closeMenu() { showMenu = false; render(); }
 function toggleAccountMenu(event) { event.stopPropagation(); showAccountMenu = !showAccountMenu; render(); }
 function closeAccountMenu() { showAccountMenu = false; render(); }
 
-function switchTab(tab) { activeTab = tab; showMenu = false; _animate = true; vibrate(8); render(); }
+function switchTab(tab) { activeTab = tab; showMenu = false; selectMode = false; selectedIds.clear(); _animate = true; vibrate(8); render(); }
 function shiftMonth(delta) {
   const [y, m] = activeMonth.split('-').map(Number);
   const d = new Date(y, m - 1 + delta, 1);
@@ -2786,6 +2804,34 @@ function setSearchFilter(val) {
 }
 function clearFilters() { expenseFilters = emptyFilters(); render(); }
 function toggleFilters() { filtersOpen = !filtersOpen; render(); }
+
+// ─── Bulk selection (Expenses) ──────────────────────────────────────────────
+function toggleSelectMode() { selectMode = !selectMode; if (!selectMode) selectedIds.clear(); render(); }
+function toggleSelectExpense(id) { if (selectedIds.has(id)) selectedIds.delete(id); else selectedIds.add(id); render(); }
+function toggleSelectAll(on) {
+  const exps = getFilteredExpenses();
+  if (on) exps.forEach(e => selectedIds.add(e.id)); else selectedIds.clear();
+  render();
+}
+function bulkSetCategory(v) {
+  if (!v || !selectedIds.size) return;
+  data.expenses.forEach(e => { if (selectedIds.has(e.id)) e.categoryId = v; });
+  saveData(data); showToast(`Updated ${selectedIds.size} ✓`); render();
+}
+function bulkSetField(field, v) {
+  if (v === '' || !selectedIds.size) return;
+  const val = v === '__none__' ? null : v;
+  data.expenses.forEach(e => { if (selectedIds.has(e.id)) e[field] = val; });
+  saveData(data); showToast(`Updated ${selectedIds.size} ✓`); render();
+}
+function bulkDelete() {
+  if (!selectedIds.size) return;
+  if (!confirm(`Delete ${selectedIds.size} selected expense${selectedIds.size > 1 ? 's' : ''}? This cannot be undone.`)) return;
+  const n = selectedIds.size;
+  data.expenses = data.expenses.filter(e => !selectedIds.has(e.id));
+  selectedIds.clear();
+  saveData(data); showToast(`Deleted ${n} ✓`); render();
+}
 
 async function resetAllData() {
   if (!(await showConfirm('Reset ALL data? This permanently erases every expense, card, trip, payroll, dashboard and setting on this device. This cannot be undone.', { danger: true, confirmText: 'Reset everything' }))) return;
