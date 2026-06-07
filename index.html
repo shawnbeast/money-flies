@@ -2055,7 +2055,7 @@ function buildCategoryModal() {
 
 function buildGroupModal() {
   const g = editingGroup;
-  const emojis = ['✈️','🇮🇹','🇪🇸','🏖️','🏔️','🗽','🎒','🚢','🏕️','🎉','💍','🏡','🎄','🎓','🏢','⚽'];
+  const emojis = ['✈️','🇮🇹','🇪🇸','🇫🇷','🇦🇹','🇵🇹','🇬🇧','🇹🇭','🇮🇳','🇨🇦','🇺🇸','🇩🇪','🇳🇱','🇯🇵','🇲🇽','🇬🇷','🏖️','🏔️','🗽','🎒','🚢','🏕️','🎉','💍','🏡','🎄','🎓','🏢','⚽'];
   return `
   <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
     <div class="card rounded-2xl w-full max-w-sm p-6 space-y-4" onclick="event.stopPropagation()">
@@ -2071,8 +2071,8 @@ function buildGroupModal() {
         </div>
         <div>
           <label class="text-xs text-slate-400 uppercase tracking-wider">Icon</label>
-          <div class="flex flex-wrap gap-2 mt-1">
-            ${emojis.map(em => `<button onclick="selectGroupEmoji('${em}')" id="gemoji_${em}" class="w-9 h-9 rounded-lg text-lg hover:bg-slate-600 transition-colors ${(g?.icon||'✈️')===em?'bg-indigo-600':'bg-slate-700'}">${em}</button>`).join('')}
+          <div class="flex flex-wrap gap-2 mt-1 max-h-32 overflow-y-auto scrollbar-thin pr-1">
+            ${emojis.map(em => `<button onclick="selectGroupEmoji('${em}')" id="gemoji_${em}" class="w-9 h-9 rounded-lg text-lg hover:bg-slate-600 transition-colors flex-shrink-0 ${(g?.icon||'✈️')===em?'bg-indigo-600':'bg-slate-700'}">${em}</button>`).join('')}
           </div>
           <input id="grp_icon" type="hidden" value="${g?.icon||'✈️'}" />
         </div>
