@@ -1039,6 +1039,7 @@ function buildDashboardToolbar() {
         ${presets.map(([id,lbl]) => `
           <button onclick="setPreset('${id}')" class="px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${dashPeriod.preset===id ? 'tab-active text-white' : 'bg-slate-700/60 text-slate-300 hover:bg-slate-600'}">${lbl}</button>
         `).join('')}
+        <input type="month" value="${dashPeriod.mode==='month' ? dashPeriod.month : ''}" onchange="setDashMonth(this.value)" title="Pick a month" class="input-field rounded-lg px-2 py-1 text-xs ${dashPeriod.preset==='pickedMonth'?'border-indigo-500':''}" />
       </div>
       <div class="flex items-center gap-1.5 ml-auto">
         <input type="date" id="rangeStart" value="${r.start}" onchange="applyCustomRange()" class="input-field rounded-lg px-2 py-1 text-xs" />
@@ -2689,6 +2690,13 @@ function applyCustomRange() {
   const end = document.getElementById('rangeEnd').value;
   if (!start || !end) return;
   dashPeriod = { mode: 'range', preset: 'custom', month: dashPeriod.month, start, end };
+  persistActivePeriod();
+  render();
+}
+
+function setDashMonth(val) {
+  if (!val) return;
+  dashPeriod = { mode: 'month', preset: 'pickedMonth', month: val, start: null, end: null };
   persistActivePeriod();
   render();
 }
