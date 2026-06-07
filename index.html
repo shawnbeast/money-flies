@@ -206,6 +206,8 @@ let showRecurringModal = false;
 let editingRecurring = null;
 let showCustomizeModal = false; // dashboard layout editor
 let showThemeModal = false; // accent color picker
+let showImportTxnModal = false; // bank CSV importer
+let importTxnRows = null; // parsed rows awaiting import
 let showMenu = false; // "More" nav dropdown
 let showAccountMenu = false; // header account/data dropdown
 let adminData = null, adminLoading = false, adminError = null; // admin view cache
@@ -625,7 +627,8 @@ function buildLayout() {
             <div class="absolute right-0 mt-1 w-56 card rounded-xl shadow-xl border border-slate-600 py-1 z-40">
               ${(currentUser && currentUser.email) ? `<div class="px-4 py-2 text-xs text-slate-500 border-b border-slate-700/50 truncate">Signed in as<br><span class="text-slate-300">${escapeHtml(currentUser.email)}</span></div>` : ''}
               <button onclick="closeAccountMenu(); openThemeModal()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">🎨 Appearance</button>
-              <button onclick="exportExcel(); closeAccountMenu()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors border-t border-slate-700/50">📊 Export to Excel</button>
+              <button onclick="closeAccountMenu(); openImportTxnModal()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors border-t border-slate-700/50">📥 Import transactions (CSV)</button>
+              <button onclick="exportExcel(); closeAccountMenu()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">📊 Export to Excel</button>
               <button onclick="exportData(); closeAccountMenu()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">⬇️ Backup (.json)</button>
               <button onclick="closeAccountMenu(); document.getElementById('importFile').click()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">⬆️ Import backup</button>
               ${(currentUser && !currentUser.local) ? `<button onclick="logout()" class="w-full text-left px-4 py-2.5 text-sm text-red-300 hover:bg-red-500/10 border-t border-slate-700/50 transition-colors">⎋ Sign out</button>` : ''}
@@ -686,6 +689,7 @@ function buildLayout() {
   ${showRecurringModal ? buildRecurringModal() : ''}
   ${showCustomizeModal ? buildCustomizeModal() : ''}
   ${showThemeModal ? buildThemeModal() : ''}
+  ${showImportTxnModal ? buildImportTxnModal() : ''}
   `;
 }
 
@@ -2335,6 +2339,115 @@ function buildThemeModal() {
   </div>`;
 }
 
+function buildImportTxnModal() {
+  const rows = importTxnRows;
+  const total = rows ? rows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0) : 0;
+  return `
+  <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
+    <div class="card rounded-2xl w-full max-w-md p-6 space-y-4 max-h-[90vh] overflow-y-auto scrollbar-thin" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between">
+        <h2 class="font-semibold text-lg">📥 Import transactions</h2>
+        <button onclick="closeImportTxnModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+      </div>
+      <p class="text-xs text-slate-400 -mt-2">Upload a CSV with columns: <b>date, description, amount, category</b>. Amounts are treated as ${data.baseCurrency}.</p>
+      <input type="file" accept=".csv,text/csv" onchange="parseTxnFile(event)" class="input-field w-full rounded-lg px-3 py-2.5 text-sm" />
+      ${rows ? `
+        <div class="card rounded-lg p-3 text-sm">
+          <p class="text-slate-200"><b>${rows.length}</b> transactions · total <b>${formatCurrency(total)}</b></p>
+          <div class="mt-2 max-h-32 overflow-y-auto scrollbar-thin text-xs text-slate-400 space-y-0.5">
+            ${rows.slice(0, 6).map(r => `<div class="flex justify-between gap-2"><span class="truncate">${escapeHtml(r.description)}</span><span>${formatCurrency(parseFloat(r.amount)||0)}</span></div>`).join('')}
+            ${rows.length > 6 ? `<div class="text-slate-500">+ ${rows.length - 6} more…</div>` : ''}
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="text-xs text-slate-400 uppercase tracking-wider">Assign card</label>
+            <select id="imp_card" class="input-field w-full rounded-lg px-2 py-2 text-sm mt-1">
+              <option value="">— None —</option>
+              ${data.cards.map(c => `<option value="${c.id}">${c.icon} ${c.name}</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <label class="text-xs text-slate-400 uppercase tracking-wider">Assign trip</label>
+            <select id="imp_trip" class="input-field w-full rounded-lg px-2 py-2 text-sm mt-1">
+              <option value="">— None —</option>
+              ${data.groups.map(g => `<option value="${g.id}">${g.icon} ${g.name}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <button onclick="doImportTxns()" class="w-full btn-primary text-white rounded-lg py-2.5 text-sm font-semibold">Import ${rows.length} transactions</button>
+        <p class="text-[11px] text-slate-500">Duplicates (same date, description & amount) are skipped automatically.</p>
+      ` : ''}
+      <button onclick="closeImportTxnModal()" class="w-full text-slate-400 hover:text-white rounded-lg py-2 text-sm">Cancel</button>
+    </div>
+  </div>`;
+}
+
+function parseCSV(text) {
+  const out = [];
+  text.split(/\r?\n/).forEach(line => {
+    if (!line.trim()) return;
+    const cells = []; let cur = '', q = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (q) { if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+      else { if (ch === '"') q = true; else if (ch === ',') { cells.push(cur); cur = ''; } else cur += ch; }
+    }
+    cells.push(cur); out.push(cells);
+  });
+  return out;
+}
+
+function parseTxnFile(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const grid = parseCSV(reader.result);
+      if (!grid.length) throw new Error('Empty file');
+      const header = grid[0].map(h => h.trim().toLowerCase());
+      const di = header.indexOf('date'), pi = header.indexOf('description'), ai = header.indexOf('amount'), ci = header.indexOf('category');
+      if (di < 0 || ai < 0) throw new Error('CSV needs at least date and amount columns.');
+      importTxnRows = grid.slice(1).map(c => ({
+        date: (c[di] || '').trim(),
+        description: (pi >= 0 ? c[pi] : '').trim() || 'Expense',
+        amount: (c[ai] || '').trim(),
+        category: (ci >= 0 ? c[ci] : '').trim().toLowerCase(),
+      })).filter(r => r.date && parseFloat(r.amount) > 0);
+      render();
+    } catch (e) { alert('Could not read CSV: ' + e.message); }
+  };
+  reader.readAsText(file);
+}
+
+function doImportTxns() {
+  if (!importTxnRows || !importTxnRows.length) return;
+  const cardId = (document.getElementById('imp_card') || {}).value || null;
+  const groupId = (document.getElementById('imp_trip') || {}).value || null;
+  const known = new Set(data.categories.map(c => c.id));
+  const existing = new Set(data.expenses.map(e => `${e.date}|${e.description}|${(e.amount || 0).toFixed(2)}`));
+  let added = 0;
+  importTxnRows.forEach(r => {
+    const amt = parseFloat(r.amount) || 0;
+    if (!r.date || amt <= 0) return;
+    const key = `${r.date}|${r.description}|${amt.toFixed(2)}`;
+    if (existing.has(key)) return;
+    existing.add(key);
+    data.expenses.push({
+      id: uuid(), description: r.description, origAmount: amt, currency: data.baseCurrency, amount: amt,
+      date: r.date, categoryId: known.has(r.category) ? r.category : 'other', cardId, groupId, note: '', createdAt: new Date().toISOString(),
+    });
+    added++;
+  });
+  saveData(data);
+  importTxnRows = null;
+  showImportTxnModal = false;
+  showToast(`Imported ${added} ✓`);
+  activeTab = 'expenses';
+  render();
+}
+
 // ─── Chart rendering ──────────────────────────────────────────────────────────
 function renderCharts() {
   destroyCharts();
@@ -2714,6 +2827,8 @@ function openCustomizeModal() { showCustomizeModal = true; showMenu = false; ren
 function closeCustomizeModal() { showCustomizeModal = false; render(); }
 function openThemeModal() { showThemeModal = true; render(); }
 function closeThemeModal() { showThemeModal = false; render(); }
+function openImportTxnModal() { importTxnRows = null; showImportTxnModal = true; render(); }
+function closeImportTxnModal() { showImportTxnModal = false; importTxnRows = null; render(); }
 function setAccent(id) { data.accent = id; saveData(data); applyTheme(); showToast('Theme updated ✓'); render(); }
 function saveDashboardLayout(layout) { const d = ensureDashboards(); d.layout = layout; saveData(data); }
 function toggleWidget(id) {
@@ -2761,7 +2876,7 @@ function resetDashboardLayout() {
   saveDashboardLayout(defaultLayout());
   render();
 }
-function closeModal(event) { if (event.target === event.currentTarget) { showExpenseModal = showCategoryModal = showGroupModal = showCardModal = showPayrollModal = showIncomeModal = showRecurringModal = showCustomizeModal = showThemeModal = false; editingExpense = editingCategory = editingGroup = editingCard = editingPayroll = editingIncome = editingRecurring = null; render(); } }
+function closeModal(event) { if (event.target === event.currentTarget) { showExpenseModal = showCategoryModal = showGroupModal = showCardModal = showPayrollModal = showIncomeModal = showRecurringModal = showCustomizeModal = showThemeModal = showImportTxnModal = false; editingExpense = editingCategory = editingGroup = editingCard = editingPayroll = editingIncome = editingRecurring = null; render(); } }
 
 function updateConvertPreview() {
   const el = document.getElementById('convertPreview');
