@@ -1369,11 +1369,14 @@ function getFilteredExpenses() {
   });
 }
 
+const EXP_RENDER_CAP = 200; // max rows drawn at once (prevents mobile memory crashes)
 function buildExpenses() {
   const f = expenseFilters;
   const exps = getFilteredExpenses().sort((a, b) => b.date.localeCompare(a.date));
   const activeCount = Object.values(f).filter(v => v !== '').length;
   const total = exps.reduce((s, e) => s + expenseBase(e), 0);
+  const shown = exps.slice(0, EXP_RENDER_CAP);
+  const capped = exps.length > EXP_RENDER_CAP;
   const sel = (cur, val) => cur === val ? 'selected' : '';
   const lbl = t => `<label class="text-[10px] text-slate-400 uppercase tracking-wider block mb-1">${t}</label>`;
   const advancedCount = ['categoryId','cardId','groupId','start','end','min','max'].filter(k => f[k] !== '').length;
@@ -1457,7 +1460,7 @@ function buildExpenses() {
           : `<button onclick="openExpenseModal()" class="mt-4 btn-primary text-white rounded-lg px-4 py-2 text-sm">Add your first expense</button>`}
       </div>` :
     `<div class="divide-y divide-slate-700/50">
-      ${exps.map(e => {
+      ${shown.map(e => {
         const cat = getCategoryById(e.categoryId);
         const sel = selectedIds.has(e.id);
         return `
@@ -1482,8 +1485,9 @@ function buildExpenses() {
         </div>`;
       }).join('')}
     </div>
+    ${capped ? `<div class="px-5 py-2 text-center text-xs text-slate-500 border-t border-slate-700/50">Showing first ${EXP_RENDER_CAP} of ${exps.length} — refine filters (date, category…) to narrow it down.</div>` : ''}
     <div class="px-5 py-3 border-t border-slate-700 flex justify-between items-center">
-      <span class="text-sm text-slate-400">Total${activeCount?' (filtered)':''}</span>
+      <span class="text-sm text-slate-400">Total${activeCount?` (${exps.length} filtered)`:''}</span>
       <span class="font-bold text-red-400">${formatCurrency(total)}</span>
     </div>`}
     </div>
