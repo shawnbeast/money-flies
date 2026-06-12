@@ -62,6 +62,7 @@
   .toast { background: #1e293b; border: 1px solid #334155; color: #f1f5f9; border-radius: 9999px; padding: 10px 18px; font-size: 14px; font-weight: 500; box-shadow: 0 8px 24px rgba(0,0,0,0.4); opacity: 0; transform: translateY(12px); transition: opacity .2s ease, transform .2s ease; max-width: 90vw; }
   .toast.show { opacity: 1; transform: translateY(0); }
   .toast.success { border-color: rgba(34,197,94,0.5); }
+  .toast.error { border-color: rgba(239,68,68,0.6); color: #fecaca; }
   .drag-handle { touch-action: none; cursor: grab; }
   @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
   .fade-in-up > * { animation: fadeUp .35s ease both; }
@@ -628,11 +629,7 @@ function buildLayout() {
           ${showAccountMenu ? `
             <div class="absolute right-0 mt-1 w-56 card rounded-xl shadow-xl border border-slate-600 py-1 z-40">
               ${(currentUser && currentUser.email) ? `<div class="px-4 py-2 text-xs text-slate-500 border-b border-slate-700/50 truncate">Signed in as<br><span class="text-slate-300">${escapeHtml(currentUser.email)}</span></div>` : ''}
-              <button onclick="closeAccountMenu(); openThemeModal()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">🎨 Appearance</button>
-              <button onclick="closeAccountMenu(); openImportTxnModal()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors border-t border-slate-700/50">📥 Import transactions (CSV)</button>
-              <button onclick="exportExcel(); closeAccountMenu()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">📊 Export to Excel</button>
-              <button onclick="exportData(); closeAccountMenu()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">⬇️ Backup (.json)</button>
-              <button onclick="closeAccountMenu(); document.getElementById('importFile').click()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">⬆️ Import backup</button>
+              <button onclick="closeAccountMenu(); switchTab('settings')" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">⚙️ Settings</button>
               ${(currentUser && !currentUser.local) ? `<button onclick="logout()" class="w-full text-left px-4 py-2.5 text-sm text-red-300 hover:bg-red-500/10 border-t border-slate-700/50 transition-colors">⎋ Sign out</button>` : ''}
             </div>` : ''}
         </div>
@@ -660,6 +657,7 @@ function buildLayout() {
       ${activeTab === 'help' ? buildHelp() : ''}
       ${activeTab === 'planner' ? buildPlanner() : ''}
       ${activeTab === 'admin' ? buildAdmin() : ''}
+      ${activeTab === 'settings' ? buildSettings() : ''}
     </main>
 
     <!-- Floating add button (mobile) -->
@@ -1122,7 +1120,7 @@ function buildHelp() {
       ${section('🎯', 'Budgets', 'Set a monthly budget per category in <b>Budgets</b>. The dashboard shows how much of each you’ve used.')}
       ${section('🌐', 'Multi-currency', 'Everything is shown in CAD by default. Spend in EUR, USD, etc. and it converts using live exchange rates (works offline with cached rates).')}
       ${section('☁️', 'Saved to your account', 'Your data is tied to your login and synced to the cloud — open the app on any device and find it there. It also works offline and syncs when you’re back online.')}
-      ${section('💾', 'Backups', 'Use the account menu (your initial, top-right) → <b>Export backup</b> to download a copy, or <b>Import</b> to restore one.')}
+      ${section('💾', 'Backups', 'Open <b>Settings</b> (account menu, top-right) → export to Excel, download a backup, or restore one.')}
     </div>
 
     <div class="card rounded-xl p-5">
@@ -1131,7 +1129,7 @@ function buildHelp() {
         <li>Install it: in your browser, tap <b>Share → Add to Home Screen</b> to use it like a real app.</li>
         <li>The month picker (top-right) changes the month for Expenses, Cards, Income & Budgets.</li>
         <li>Recurring items show a small 🔁 in the expense list.</li>
-        <li>Need a clean start? <b>Budgets → Reset all data</b> (export a backup first!).</li>
+        <li>Need a clean start? <b>Settings → Reset all data</b> (make a backup first!).</li>
       </ul>
     </div>
 
@@ -1474,8 +1472,15 @@ function buildExpenses() {
         ${activeCount ? `<button onclick="clearFilters()" class="mt-4 bg-slate-700 hover:bg-slate-600 text-white rounded-lg px-4 py-2 text-sm">Clear filters</button>`
           : `<button onclick="openExpenseModal()" class="mt-4 btn-primary text-white rounded-lg px-4 py-2 text-sm">Add your first expense</button>`}
       </div>` :
-    `<div class="divide-y divide-slate-700/50">
-      ${shown.map(e => {
+    `${(() => {
+      // group rendered rows by day, with per-day subtotals computed over ALL filtered expenses
+      const dayTotals = {};
+      exps.forEach(e => { dayTotals[e.date] = (dayTotals[e.date] || 0) + expenseBase(e); });
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().slice(0, 10); })();
+      const dayLabel = d => d === todayStr ? 'Today' : d === yesterday ? 'Yesterday'
+        : new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+      const row = e => {
         const cat = getCategoryById(e.categoryId);
         const sel = selectedIds.has(e.id);
         return `
@@ -1484,7 +1489,7 @@ function buildExpenses() {
           <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0" style="background:${cat.color}22">${cat.icon}</div>
           <div class="flex-1 min-w-0">
             <p class="font-medium text-slate-200 truncate">${e.description}</p>
-            <p class="text-xs text-slate-500">${e.recurringId ? '🔁 ' : ''}${cat.name} · ${new Date(e.date + 'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</p>
+            <p class="text-xs text-slate-500">${e.recurringId ? '🔁 ' : ''}${cat.name}</p>
           </div>
           ${(() => { const c = e.cardId ? getCardById(e.cardId) : null; return c ? `<span class="text-xs px-2 py-0.5 rounded-full flex-shrink-0 hidden sm:inline" style="background:${c.color}22;color:${c.color}">${c.icon} ${c.name}</span>` : ''; })()}
           ${(() => { const g = e.groupId ? getGroupById(e.groupId) : null; return g ? `<span class="text-xs px-2 py-0.5 rounded-full flex-shrink-0 hidden sm:inline" style="background:${g.color}22;color:${g.color}">${g.icon} ${g.name}</span>` : ''; })()}
@@ -1498,8 +1503,22 @@ function buildExpenses() {
             <button onclick="deleteExpense('${e.id}')" class="p-1.5 rounded-lg hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-colors text-sm">🗑️</button>
           </div>`}
         </div>`;
-      }).join('')}
-    </div>
+      };
+      const days = [];
+      let cur = null;
+      shown.forEach(e => {
+        if (!cur || cur.date !== e.date) { cur = { date: e.date, items: [] }; days.push(cur); }
+        cur.items.push(e);
+      });
+      return days.map(d => `
+        <div>
+          <div class="px-5 py-1.5 bg-slate-800/70 border-b border-slate-700/40 flex justify-between items-center">
+            <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">${dayLabel(d.date)}</span>
+            <span class="text-[11px] text-slate-500">${formatCurrency(dayTotals[d.date])}</span>
+          </div>
+          <div class="divide-y divide-slate-700/40">${d.items.map(row).join('')}</div>
+        </div>`).join('');
+    })()}
     ${capped ? `<div class="px-5 py-2 text-center text-xs text-slate-500 border-t border-slate-700/50">Showing first ${EXP_RENDER_CAP} of ${exps.length} — refine filters (date, category…) to narrow it down.</div>` : ''}
     <div class="px-5 py-3 border-t border-slate-700 flex justify-between items-center">
       <span class="text-sm text-slate-400">Total${activeCount?` (${exps.length} filtered)`:''}</span>
@@ -1803,36 +1822,6 @@ function buildBudgets() {
   const { byCategory } = getMonthTotals(activeMonth);
   return `
   <div class="space-y-6">
-    <!-- Base currency setting -->
-    <div class="card rounded-xl p-5 flex items-center gap-4 flex-wrap">
-      <span class="text-2xl">🌐</span>
-      <div class="flex-1 min-w-[180px]">
-        <p class="font-medium text-slate-200">Base Currency</p>
-        <p class="text-xs text-slate-400">All budgets & KPIs are shown in this. ${data.rates.fetchedAt ? 'Live rates updated ' + new Date(data.rates.fetchedAt).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : 'Using offline fallback rates'}</p>
-      </div>
-      <div class="flex items-center gap-2">
-        <select id="baseCurrencySelect" onchange="updateBaseCurrency(this.value)" class="input-field rounded-lg px-3 py-2 font-semibold">
-          ${Object.entries(CURRENCIES).map(([c, info]) => `<option value="${c}" ${data.baseCurrency===c?'selected':''}>${info.symbol} ${c} — ${info.name}</option>`).join('')}
-        </select>
-        <button onclick="refreshRates()" class="bg-slate-700 hover:bg-slate-600 text-white rounded-lg px-3 py-2 text-sm transition-colors" title="Refresh exchange rates">🔄</button>
-      </div>
-    </div>
-
-    <!-- Income setting -->
-    <div class="card rounded-xl p-5 flex items-center gap-4 flex-wrap">
-      <span class="text-2xl">💵</span>
-      <div class="flex-1">
-        <p class="font-medium text-slate-200">Monthly Income</p>
-        <p class="text-xs text-slate-400">Used to calculate your savings rate (in ${data.baseCurrency})</p>
-      </div>
-      <div class="flex items-center gap-2">
-        <span class="text-slate-400">${(CURRENCIES[data.baseCurrency]||{}).symbol||''}</span>
-        <input id="incomeInput" type="number" value="${data.income}" min="0" step="100"
-          class="input-field rounded-lg px-3 py-2 w-36 text-right font-semibold"
-          onchange="updateIncome(this.value)" />
-      </div>
-    </div>
-
     <!-- Category budgets -->
     <div class="card rounded-xl overflow-hidden">
       <div class="px-5 py-4 border-b border-slate-700 flex items-center justify-between">
@@ -1916,6 +1905,82 @@ function buildBudgets() {
         </div>
       </div>`;
     })()}
+  </div>`;
+}
+
+// ─── Settings ─────────────────────────────────────────────────────────────────
+function buildSettings() {
+  const curAccent = data.accent || 'indigo';
+  const sym = (CURRENCIES[data.baseCurrency] || {}).symbol || '';
+  const actionBtn = (onclick, icon, title, sub) => `
+    <button onclick="${onclick}" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-slate-800/60 hover:bg-slate-700/60 transition-colors text-left">
+      <span class="text-xl flex-shrink-0">${icon}</span>
+      <span class="min-w-0">
+        <span class="block text-sm font-medium text-slate-200">${title}</span>
+        <span class="block text-xs text-slate-500">${sub}</span>
+      </span>
+    </button>`;
+  return `
+  <div class="space-y-5 max-w-2xl mx-auto">
+    ${(currentUser && !currentUser.local) ? `
+    <div class="card rounded-xl p-5 flex items-center gap-4">
+      <div class="w-11 h-11 rounded-full bg-indigo-600 text-white flex items-center justify-center text-lg font-semibold flex-shrink-0">${escapeHtml((currentUser.email || '?')[0].toUpperCase())}</div>
+      <div class="flex-1 min-w-0">
+        <p class="font-medium text-slate-200">Signed in</p>
+        <p class="text-xs text-slate-400 truncate">${escapeHtml(currentUser.email || '')}</p>
+      </div>
+      <button onclick="logout()" class="bg-slate-700 hover:bg-red-500/30 text-slate-300 hover:text-red-300 rounded-lg px-3 py-2 text-sm transition-colors">⎋ Sign out</button>
+    </div>` : ''}
+
+    <!-- Appearance -->
+    <div class="card rounded-xl p-5">
+      <h3 class="font-semibold text-slate-200 mb-1">🎨 Appearance</h3>
+      <p class="text-xs text-slate-500 mb-3">Accent color — saved to your account.</p>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        ${ACCENT_PRESETS.map(p => `
+          <button onclick="setAccent('${p.id}')" class="flex items-center gap-2 rounded-xl p-2.5 border transition-colors ${curAccent===p.id ? 'border-white/70 bg-slate-700/50' : 'border-slate-700 hover:bg-slate-700/40'}">
+            <span class="w-6 h-6 rounded-full flex-shrink-0" style="background:linear-gradient(135deg,${p.c1},${p.c2})"></span>
+            <span class="text-xs text-slate-200">${p.name}</span>
+          </button>`).join('')}
+      </div>
+    </div>
+
+    <!-- Currency & income -->
+    <div class="card rounded-xl p-5 space-y-4">
+      <h3 class="font-semibold text-slate-200">🌐 Currency &amp; income</h3>
+      <div class="flex items-center gap-3 flex-wrap">
+        <div class="flex-1 min-w-[160px]">
+          <p class="text-sm text-slate-300">Base currency</p>
+          <p class="text-xs text-slate-500">${data.rates.fetchedAt ? 'Live rates updated ' + new Date(data.rates.fetchedAt).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : 'Using offline fallback rates'}</p>
+        </div>
+        <select id="baseCurrencySelect" onchange="updateBaseCurrency(this.value)" class="input-field rounded-lg px-3 py-2 font-semibold">
+          ${Object.entries(CURRENCIES).map(([c, info]) => `<option value="${c}" ${data.baseCurrency===c?'selected':''}>${info.symbol} ${c} — ${info.name}</option>`).join('')}
+        </select>
+        <button onclick="refreshRates()" class="bg-slate-700 hover:bg-slate-600 text-white rounded-lg px-3 py-2 text-sm transition-colors" title="Refresh exchange rates">🔄</button>
+      </div>
+      <div class="flex items-center gap-3 flex-wrap border-t border-slate-700/50 pt-4">
+        <div class="flex-1 min-w-[160px]">
+          <p class="text-sm text-slate-300">Monthly income (fallback)</p>
+          <p class="text-xs text-slate-500">Used when no payroll is set up — in ${data.baseCurrency}</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-slate-400">${sym}</span>
+          <input id="incomeInput" type="number" inputmode="decimal" value="${data.income}" min="0" step="100"
+            class="input-field rounded-lg px-3 py-2 w-32 text-right font-semibold" onchange="updateIncome(this.value)" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Data -->
+    <div class="card rounded-xl p-5">
+      <h3 class="font-semibold text-slate-200 mb-3">💾 Data</h3>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        ${actionBtn('openImportTxnModal()', '📥', 'Import transactions', 'Bank CSV (date, description, amount…)')}
+        ${actionBtn('exportExcel()', '📊', 'Export to Excel', 'All expenses, income & recurring (.xlsx)')}
+        ${actionBtn('exportData()', '⬇️', 'Backup', 'Full restorable backup (.json)')}
+        ${actionBtn("document.getElementById('importFile').click()", '⬆️', 'Restore backup', 'Replace data from a .json backup')}
+      </div>
+    </div>
 
     <!-- Danger zone -->
     <div class="card rounded-xl p-5 border border-red-500/30">
@@ -1923,7 +1988,7 @@ function buildBudgets() {
         <span class="text-2xl">⚠️</span>
         <div class="flex-1 min-w-[200px]">
           <p class="font-medium text-red-300">Reset all data</p>
-          <p class="text-xs text-slate-400">Erases every expense, card, trip, payroll, dashboard & setting on this device — back to a clean slate. Tip: hit ⬇️ Export first to keep a backup.</p>
+          <p class="text-xs text-slate-400">Erases every expense, card, trip, payroll, dashboard & setting — back to a clean slate. Tip: make a backup first.</p>
         </div>
         <button onclick="resetAllData()" class="bg-red-500/20 hover:bg-red-500/40 text-red-300 hover:text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors">Reset all data</button>
       </div>
@@ -2454,7 +2519,7 @@ function parseTxnFile(event) {
         category: (ci >= 0 ? c[ci] : '').trim().toLowerCase(),
       })).filter(r => r.date && parseFloat(r.amount) > 0);
       render();
-    } catch (e) { alert('Could not read CSV: ' + e.message); }
+    } catch (e) { showToast('Could not read CSV: ' + e.message, 'error'); }
   };
   reader.readAsText(file);
 }
@@ -2667,6 +2732,7 @@ const TAB_META = {
   trips:    { icon: '✈️', name: 'Trips' },
   cards:    { icon: '💳', name: 'Cards' },
   planner:  { icon: '🧮', name: 'Planner' },
+  settings: { icon: '⚙️', name: 'Settings' },
   admin:    { icon: '🔐', name: 'Admin' },
 };
 function tabLabel(t) { const m = TAB_META[t]; return m ? `${m.icon} ${m.name}` : t; }
@@ -2782,7 +2848,7 @@ function addCustomKpi() {
   const metric = document.getElementById('ckpi_metric').value;
   const categoryId = document.getElementById('ckpi_cat').value || '';
   const cardId = document.getElementById('ckpi_card').value || '';
-  if (!label) { alert('Give the tile a name.'); return; }
+  if (!label) { showToast('Give the tile a name.', 'error'); return; }
   if (!Array.isArray(d.customKpis)) d.customKpis = [];
   d.customKpis.push({ id: uuid(), label, metric, categoryId, cardId });
   // make sure the custom-KPIs section is visible
@@ -2801,7 +2867,7 @@ function deleteCustomKpi(id) {
 
 async function deleteDashboard() {
   ensureDashboards();
-  if (data.dashboards.length <= 1) { alert('You need at least one dashboard.'); return; }
+  if (data.dashboards.length <= 1) { showToast('You need at least one dashboard.', 'error'); return; }
   if (!(await showConfirm('Delete this dashboard? (Your expenses and data are not affected.)', { danger: true, confirmText: 'Delete' }))) return;
   data.dashboards = data.dashboards.filter(d => d.id !== data.activeDashboardId);
   data.activeDashboardId = data.dashboards[0].id;
@@ -2851,9 +2917,9 @@ function bulkSetField(field, v) {
   data.expenses.forEach(e => { if (selectedIds.has(e.id)) e[field] = val; });
   saveData(data); showToast(`Updated ${selectedIds.size} ✓`); render();
 }
-function bulkDelete() {
+async function bulkDelete() {
   if (!selectedIds.size) return;
-  if (!confirm(`Delete ${selectedIds.size} selected expense${selectedIds.size > 1 ? 's' : ''}? This cannot be undone.`)) return;
+  if (!(await showConfirm(`Delete ${selectedIds.size} selected expense${selectedIds.size > 1 ? 's' : ''}? This cannot be undone.`, { danger: true, confirmText: 'Delete' }))) return;
   const n = selectedIds.size;
   data.expenses = data.expenses.filter(e => !selectedIds.has(e.id));
   selectedIds.clear();
@@ -2870,7 +2936,7 @@ async function resetAllData() {
   dashPeriod = { mode: 'month', preset: 'thisMonth', month: new Date().toISOString().slice(0, 7), start: null, end: null };
   saveData(data); // also resets the cloud copy for the signed-in account
   render();
-  alert('All data has been reset. Fresh start! 🌱');
+  showToast('All data reset — fresh start 🌱');
 }
 function setFilterDates(preset) {
   const now = new Date();
@@ -2977,7 +3043,7 @@ function saveExpense(andAnother) {
   const note = document.getElementById('exp_note').value.trim();
   const groupId = document.getElementById('exp_group').value || null;
   const cardId = document.getElementById('exp_card').value || null;
-  if (!desc || !origAmount || origAmount <= 0 || !date || !categoryId) { alert('Please fill in description, amount, date and category.'); return; }
+  if (!desc || !origAmount || origAmount <= 0 || !date || !categoryId) { showToast('Fill in description, amount, date & category', 'error'); return; }
   const amount = toBase(origAmount, currency); // cached base value for convenience
   if (editingExpense) {
     Object.assign(editingExpense, { description: desc, origAmount, currency, amount, date, categoryId, note, groupId, cardId });
@@ -3036,7 +3102,7 @@ function saveCategory() {
   const icon = document.getElementById('cat_icon').value;
   const color = document.getElementById('cat_color').value;
   const budget = parseFloat(document.getElementById('cat_budget').value) || 0;
-  if (!name) { alert('Category name is required.'); return; }
+  if (!name) { showToast('Category name is required', 'error'); return; }
   if (editingCategory) {
     Object.assign(editingCategory, { name, icon, color, budget });
   } else {
@@ -3072,7 +3138,7 @@ function saveGroup() {
   const icon = document.getElementById('grp_icon').value;
   const color = document.getElementById('grp_color').value;
   const budget = parseFloat(document.getElementById('grp_budget').value) || 0;
-  if (!name) { alert('Trip name is required.'); return; }
+  if (!name) { showToast('Trip name is required', 'error'); return; }
   if (editingGroup) {
     Object.assign(editingGroup, { name, icon, color, budget });
   } else {
@@ -3109,7 +3175,7 @@ function saveCard() {
   const limit = parseFloat(document.getElementById('card_limit').value) || 0;
   const icon = document.getElementById('card_icon').value;
   const color = document.getElementById('card_color').value;
-  if (!name) { alert('Card name is required.'); return; }
+  if (!name) { showToast('Card name is required', 'error'); return; }
   if (editingCard) {
     Object.assign(editingCard, { name, last4, limit, icon, color });
   } else {
@@ -3138,7 +3204,7 @@ function savePayroll() {
   const currency = document.getElementById('pay_currency').value;
   const frequency = document.getElementById('pay_freq').value;
   const startDate = document.getElementById('pay_start').value;
-  if (!source || !amount || amount <= 0 || !startDate) { alert('Please fill in all required fields.'); return; }
+  if (!source || !amount || amount <= 0 || !startDate) { showToast('Fill in all required fields', 'error'); return; }
   if (editingPayroll) {
     Object.assign(editingPayroll, { source, amount, currency, frequency, startDate });
   } else {
@@ -3165,7 +3231,7 @@ function saveIncome() {
   const currency = document.getElementById('inc_currency').value;
   const date = document.getElementById('inc_date').value;
   const note = document.getElementById('inc_note').value.trim();
-  if (!source || !amount || amount <= 0 || !date) { alert('Please fill in source, amount and date.'); return; }
+  if (!source || !amount || amount <= 0 || !date) { showToast('Fill in source, amount & date', 'error'); return; }
   if (editingIncome) {
     Object.assign(editingIncome, { source, amount, currency, date, note });
   } else {
@@ -3197,7 +3263,7 @@ function saveRecurring() {
   const startDate = document.getElementById('rec_start').value;
   const cardId = document.getElementById('rec_card').value || null;
   const note = document.getElementById('rec_note').value.trim();
-  if (!description || !amount || amount <= 0 || !startDate || !categoryId) { alert('Please fill in description, amount, category and date.'); return; }
+  if (!description || !amount || amount <= 0 || !startDate || !categoryId) { showToast('Fill in description, amount, category & date', 'error'); return; }
   if (editingRecurring) {
     Object.assign(editingRecurring, { description, amount, currency, frequency, categoryId, startDate, cardId, note });
   } else {
@@ -3245,7 +3311,7 @@ function exportData() {
 }
 
 function exportExcel() {
-  if (!window.XLSX) { alert('Excel library not loaded yet — check your connection and try again.'); return; }
+  if (!window.XLSX) { showToast('Excel library not loaded — check connection', 'error'); return; }
   const XLSX = window.XLSX;
   const base = data.baseCurrency;
   const r2 = n => Math.round((Number(n) || 0) * 100) / 100;
@@ -3302,9 +3368,9 @@ function importData(event) {
       data.expenses.forEach(e => { if (e.currency == null) e.currency = data.baseCurrency; if (e.origAmount == null) e.origAmount = e.amount; });
       saveData(data);
       render();
-      alert('Backup restored successfully ✅');
+      showToast('Backup restored ✓');
     } catch (err) {
-      alert('Could not import this file: ' + err.message);
+      showToast('Could not import: ' + err.message, 'error');
     }
     event.target.value = ''; // allow re-importing the same file
   };
@@ -3399,7 +3465,7 @@ async function loadFromCloud() {
     }
     // No cloud row yet → first time for this account.
     const localHasData = data && Array.isArray(data.expenses) && data.expenses.length > 0;
-    if (localHasData && confirm('Importer les données déjà présentes sur cet appareil dans ce compte ? (Annuler = repartir à zéro)')) {
+    if (localHasData && await showConfirm('Import the data already on this device into this account? (Cancel = start fresh)', { confirmText: 'Import', cancelText: 'Start fresh' })) {
       await saveToCloud(true); // push current local data up
     } else {
       data = defaultData();
