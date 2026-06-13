@@ -2066,6 +2066,30 @@ function buildExpenseModal() {
           <input id="exp_note" type="text" placeholder="Any additional details..." value="${e?.note||''}"
             class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
         </div>
+        ${!e ? `
+        <div class="bg-slate-800/50 rounded-lg p-3">
+          <div class="flex items-center justify-between">
+            <span class="text-sm text-slate-200">🔁 Repeat until a date</span>
+            <button type="button" id="exp_recur_btn" role="switch" aria-checked="false" onclick="toggleRecur()"
+              class="relative w-11 h-6 rounded-full bg-slate-600 transition-colors flex-shrink-0">
+              <span class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-all"></span>
+            </button>
+            <input type="hidden" id="exp_recur" value="" />
+          </div>
+          <div id="exp_recur_opts" class="hidden grid grid-cols-2 gap-3 mt-3">
+            <div>
+              <label class="text-[10px] text-slate-400 uppercase tracking-wider block mb-1">Every</label>
+              <select id="exp_recur_freq" class="input-field w-full rounded-lg px-2 py-2 text-sm">
+                ${['weekly','biweekly','semimonthly','monthly','yearly'].map(f => `<option value="${f}" ${f==='monthly'?'selected':''}>${freqLabel(f).split(' (')[0]}</option>`).join('')}
+              </select>
+            </div>
+            <div>
+              <label class="text-[10px] text-slate-400 uppercase tracking-wider block mb-1">Until</label>
+              <input id="exp_recur_until" type="date" class="input-field w-full rounded-lg px-2 py-2 text-sm" />
+            </div>
+            <p id="exp_recur_hint" class="col-span-2 text-[11px] text-slate-500"></p>
+          </div>
+        </div>` : ''}
       </div>
       <div class="space-y-2 pt-2">
         <button onclick="saveExpense()" class="w-full btn-primary text-white rounded-lg py-3 text-sm font-semibold transition-all">${e ? 'Save Changes' : 'Add Expense'}</button>
@@ -3034,6 +3058,34 @@ function selectExpCat(id) {
   });
 }
 
+// Toggle the "repeat until a date" section in the expense modal.
+function toggleRecur() {
+  const inp = document.getElementById('exp_recur'); if (!inp) return;
+  const on = inp.value !== 'on';
+  inp.value = on ? 'on' : '';
+  const btn = document.getElementById('exp_recur_btn');
+  btn.setAttribute('aria-checked', on);
+  btn.className = `relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${on ? 'bg-green-500' : 'bg-slate-600'}`;
+  btn.querySelector('span').className = `absolute top-0.5 ${on ? 'left-[22px]' : 'left-0.5'} w-5 h-5 bg-white rounded-full shadow transition-all`;
+  document.getElementById('exp_recur_opts').classList.toggle('hidden', !on);
+  if (on) {
+    const until = document.getElementById('exp_recur_until');
+    if (!until.value) { const d = new Date(document.getElementById('exp_date').value + 'T12:00:00'); d.setMonth(d.getMonth() + 6); until.value = d.toISOString().slice(0, 10); }
+    document.getElementById('exp_recur_freq').onchange = updateRecurHint;
+    until.onchange = updateRecurHint;
+    updateRecurHint();
+  }
+}
+function updateRecurHint() {
+  const hint = document.getElementById('exp_recur_hint'); if (!hint) return;
+  const start = document.getElementById('exp_date').value;
+  const freq = document.getElementById('exp_recur_freq').value;
+  const until = document.getElementById('exp_recur_until').value;
+  if (!start || !until || until < start) { hint.textContent = ''; return; }
+  const n = payDatesInRange({ frequency: freq, startDate: start }, start, until).length;
+  hint.textContent = `Will create ${n} expense${n === 1 ? '' : 's'} from ${start} to ${until}.`;
+}
+
 function saveExpense(andAnother) {
   const desc = document.getElementById('exp_desc').value.trim();
   const origAmount = parseFloat(document.getElementById('exp_amount').value);
@@ -3045,15 +3097,28 @@ function saveExpense(andAnother) {
   const cardId = document.getElementById('exp_card').value || null;
   if (!desc || !origAmount || origAmount <= 0 || !date || !categoryId) { showToast('Fill in description, amount, date & category', 'error'); return; }
   const amount = toBase(origAmount, currency); // cached base value for convenience
+  const recurEl = document.getElementById('exp_recur');
+  const isRecur = !editingExpense && recurEl && recurEl.value === 'on';
+
   if (editingExpense) {
     Object.assign(editingExpense, { description: desc, origAmount, currency, amount, date, categoryId, note, groupId, cardId });
-  } else {
-    data.expenses.push({ id: uuid(), description: desc, origAmount, currency, amount, date, categoryId, note, groupId, cardId, createdAt: new Date().toISOString() });
+    saveData(data); showToast('Saved ✓'); closeExpenseModal(); return;
   }
+
+  if (isRecur) {
+    const freq = document.getElementById('exp_recur_freq').value;
+    const until = document.getElementById('exp_recur_until').value;
+    if (!until || until < date) { showToast('Pick an end date after the expense date', 'error'); return; }
+    const dates = payDatesInRange({ frequency: freq, startDate: date }, date, until).slice(0, 366);
+    const seriesId = 'series_' + uuid();
+    dates.forEach(d => data.expenses.push({ id: uuid(), description: desc, origAmount, currency, amount, date: d, categoryId, note, groupId, cardId, recurringId: seriesId, createdAt: new Date().toISOString() }));
+    saveData(data); showToast(`Added ${dates.length} recurring ✓`); closeExpenseModal(); return;
+  }
+
+  data.expenses.push({ id: uuid(), description: desc, origAmount, currency, amount, date, categoryId, note, groupId, cardId, createdAt: new Date().toISOString() });
   saveData(data);
-  showToast(editingExpense ? 'Saved ✓' : 'Added ✓');
-  if (andAnother && !editingExpense) {
-    // keep the modal open and reset for the next entry (chained entry)
+  showToast('Added ✓');
+  if (andAnother) {
     render();
     setTimeout(() => { const el = document.getElementById('exp_desc'); if (el) el.focus(); }, 60);
   } else {
