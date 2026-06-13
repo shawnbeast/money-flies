@@ -207,6 +207,8 @@ let showRecurringModal = false;
 let editingRecurring = null;
 let showCustomizeModal = false; // dashboard layout editor
 let showThemeModal = false; // accent color picker
+let showWrapped = false; // monthly recap card
+let wrappedMonth = new Date().toISOString().slice(0, 7);
 let showImportTxnModal = false; // bank CSV importer
 let importTxnRows = null; // parsed rows awaiting import
 let showMenu = false; // "More" nav dropdown
@@ -629,6 +631,7 @@ function buildLayout() {
           ${showAccountMenu ? `
             <div class="absolute right-0 mt-1 w-56 card rounded-xl shadow-xl border border-slate-600 py-1 z-40">
               ${(currentUser && currentUser.email) ? `<div class="px-4 py-2 text-xs text-slate-500 border-b border-slate-700/50 truncate">Signed in as<br><span class="text-slate-300">${escapeHtml(currentUser.email)}</span></div>` : ''}
+              <button onclick="openWrapped()" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">✨ Monthly Wrapped</button>
               <button onclick="closeAccountMenu(); switchTab('settings')" class="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700/50 transition-colors">⚙️ Settings</button>
               ${(currentUser && !currentUser.local) ? `<button onclick="logout()" class="w-full text-left px-4 py-2.5 text-sm text-red-300 hover:bg-red-500/10 border-t border-slate-700/50 transition-colors">⎋ Sign out</button>` : ''}
             </div>` : ''}
@@ -689,6 +692,7 @@ function buildLayout() {
   ${showRecurringModal ? buildRecurringModal() : ''}
   ${showCustomizeModal ? buildCustomizeModal() : ''}
   ${showThemeModal ? buildThemeModal() : ''}
+  ${showWrapped ? buildWrapped() : ''}
   ${showImportTxnModal ? buildImportTxnModal() : ''}
   `;
 }
@@ -1996,7 +2000,82 @@ function buildSettings() {
   </div>`;
 }
 
-// ─── Analytics ────────────────────────────────────────────────────────────────
+// ─── Money Flies Wrapped (monthly recap) ────────────────────────────────────────
+function prevMonthStr(m) { const [y, mo] = m.split('-').map(Number); const d = new Date(y, mo - 2, 1); return d.toISOString().slice(0, 7); }
+function wrappedStats(month) {
+  const exps = data.expenses.filter(e => e.date.startsWith(month));
+  const total = exps.reduce((s, e) => s + expenseBase(e), 0);
+  const byCat = {}; exps.forEach(e => { byCat[e.categoryId] = (byCat[e.categoryId] || 0) + expenseBase(e); });
+  const topCatId = Object.keys(byCat).sort((a, b) => byCat[b] - byCat[a])[0];
+  const biggest = exps.slice().sort((a, b) => expenseBase(b) - expenseBase(a))[0];
+  const prev = data.expenses.filter(e => e.date.startsWith(prevMonthStr(month))).reduce((s, e) => s + expenseBase(e), 0);
+  const change = prev > 0 ? ((total - prev) / prev) * 100 : null;
+  const byCard = {}; exps.forEach(e => { if (e.cardId) byCard[e.cardId] = (byCard[e.cardId] || 0) + expenseBase(e); });
+  const topCardId = Object.keys(byCard).sort((a, b) => byCard[b] - byCard[a])[0];
+  const days = new Set(exps.map(e => e.date)).size;
+  const ms = month + '-01', me = lastDayOfMonth(month);
+  const earned = earnedInRange(ms, me);
+  return { total, count: exps.length, topCatId, topCatAmt: byCat[topCatId], biggest, change, topCardId, topCardAmt: byCard[topCardId], days, earned, net: earned - total };
+}
+
+function buildWrapped() {
+  const m = wrappedMonth;
+  const s = wrappedStats(m);
+  const monthName = new Date(m + '-02').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const cat = s.topCatId ? getCategoryById(s.topCatId) : null;
+  const card = s.topCardId ? getCardById(s.topCardId) : null;
+  const stat = (icon, label, value) => `
+    <div class="flex items-center gap-3 py-2.5 border-t border-white/15">
+      <span class="text-2xl flex-shrink-0">${icon}</span>
+      <div class="flex-1 min-w-0"><p class="text-xs text-white/70 uppercase tracking-wider">${label}</p><p class="text-sm font-semibold text-white truncate">${value}</p></div>
+    </div>`;
+  return `
+  <div class="modal-bg fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4" onclick="if(event.target===event.currentTarget)closeWrapped()">
+    <div class="w-full sm:max-w-sm rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl" onclick="event.stopPropagation()" id="wrappedCard"
+      style="background:linear-gradient(160deg, var(--accent), var(--accent2) 60%, #0f172a)">
+      <div class="p-6 pb-5">
+        <div class="flex items-center justify-between mb-1">
+          <div class="flex items-center gap-1">
+            <button onclick="wrappedShift(-1)" class="w-7 h-7 rounded-lg bg-white/15 text-white flex items-center justify-center leading-none">‹</button>
+            <button onclick="wrappedShift(1)" class="w-7 h-7 rounded-lg bg-white/15 text-white flex items-center justify-center leading-none">›</button>
+          </div>
+          <button onclick="closeWrapped()" class="text-white/80 hover:text-white text-xl leading-none">&times;</button>
+        </div>
+        <p class="text-white/80 text-sm">✨ Your month in review</p>
+        <h2 class="text-white font-extrabold text-2xl">${monthName}</h2>
+        ${s.count === 0 ? `<p class="text-white/80 text-sm mt-6 mb-2">No expenses logged this month.</p>` : `
+        <p class="text-white/70 text-xs uppercase tracking-wider mt-5">Total spent</p>
+        <p class="text-white font-extrabold text-4xl mt-1">${countUp(s.total)}</p>
+        ${s.change != null ? `<p class="text-white/80 text-sm mt-1">${s.change >= 0 ? '📈' : '📉'} ${Math.abs(s.change).toFixed(0)}% ${s.change >= 0 ? 'more' : 'less'} than last month</p>` : ''}
+        <div class="mt-5">
+          ${cat ? stat(cat.icon, 'Top category', `${cat.name} — ${formatCurrency(s.topCatAmt)}`) : ''}
+          ${s.biggest ? stat('💥', 'Biggest expense', `${escapeHtml(s.biggest.description)} — ${formatCurrency(expenseBase(s.biggest))}`) : ''}
+          ${card ? stat(card.icon, 'Most-used card', `${card.name} — ${formatCurrency(s.topCardAmt)}`) : ''}
+          ${stat('🧾', 'Transactions', `${s.count} over ${s.days} day${s.days === 1 ? '' : 's'}`)}
+          ${s.earned > 0 ? stat(s.net >= 0 ? '💚' : '⚠️', 'Net (earned − spent)', `${s.net < 0 ? '−' : '+'}${formatCurrency(s.net)}`) : ''}
+        </div>`}
+      </div>
+      <div class="bg-black/20 p-4 flex gap-2">
+        <button onclick="shareWrapped()" class="flex-1 bg-white text-slate-900 rounded-xl py-2.5 text-sm font-semibold">📤 Share</button>
+        <button onclick="closeWrapped()" class="px-4 bg-white/15 text-white rounded-xl py-2.5 text-sm font-medium">Done</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function openWrapped() { wrappedMonth = new Date().toISOString().slice(0, 7); showWrapped = true; showAccountMenu = false; render(); requestAnimationFrame(animateCounters); }
+function closeWrapped() { showWrapped = false; render(); }
+function wrappedShift(d) { const [y, mo] = wrappedMonth.split('-').map(Number); wrappedMonth = new Date(y, mo - 1 + d, 1).toISOString().slice(0, 7); render(); requestAnimationFrame(animateCounters); }
+function shareWrapped() {
+  const s = wrappedStats(wrappedMonth);
+  const monthName = new Date(wrappedMonth + '-02').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const cat = s.topCatId ? getCategoryById(s.topCatId) : null;
+  const txt = `My ${monthName} on Money Flies 💸\nSpent ${formatCurrency(s.total)} across ${s.count} purchases${cat ? `\nTop: ${cat.name} (${formatCurrency(s.topCatAmt)})` : ''}${s.change != null ? `\n${s.change >= 0 ? '📈' : '📉'} ${Math.abs(s.change).toFixed(0)}% vs last month` : ''}`;
+  if (navigator.share) { navigator.share({ title: 'Money Flies', text: txt }).catch(() => {}); }
+  else if (navigator.clipboard) { navigator.clipboard.writeText(txt); showToast('Copied to clipboard ✓'); }
+  else { showToast('Screenshot this card to share 📸'); }
+}
+
 // ─── Modals ───────────────────────────────────────────────────────────────────
 function buildExpenseModal() {
   const e = editingExpense;
@@ -2717,7 +2796,10 @@ function renderAnalyticsCharts() {
       data: {
         labels: months6.map(monthLabel),
         datasets: [
-          { label: 'Spent', data: months6.map(m => getMonthTotals(m).total), backgroundColor: months6.map(m => getMonthTotals(m).total > budgetLine ? 'rgba(239,68,68,0.7)' : 'rgba(99,102,241,0.7)'), borderRadius: 6 },
+          { label: 'Spent', data: months6.map(m => getMonthTotals(m).total), borderRadius: 6, backgroundColor: (c) => {
+              const v = getMonthTotals(months6[c.dataIndex]).total; const base = v > budgetLine ? '#ef4444' : '#6366f1';
+              const { ctx, chartArea } = c.chart; if (!chartArea) return base;
+              const g = ctx.createLinearGradient(0, chartArea.bottom, 0, chartArea.top); g.addColorStop(0, base + '33'); g.addColorStop(1, base); return g; } },
           { label: 'Budget', data: months6.map(() => budgetLine), type: 'line', borderColor: '#f59e0b', borderDash: [5,5], tension: 0, pointRadius: 0, borderWidth: 2 }
         ]
       },
@@ -2729,14 +2811,28 @@ function renderAnalyticsCharts() {
 function chartOpts() {
   return {
     responsive: true, maintainAspectRatio: true,
+    animation: { duration: 800, easing: 'easeOutQuart' },
     plugins: { legend: { labels: { color: '#94a3b8', font: { size: 12 } } }, tooltip: { backgroundColor: '#1e293b', borderColor: '#334155', borderWidth: 1, titleColor: '#f1f5f9', bodyColor: '#94a3b8', callbacks: { label: ctx => ' ' + formatCurrency(ctx.parsed.y||ctx.parsed) } } },
     scales: { x: { ticks: { color: '#64748b' }, grid: { color: '#1e293b' } }, y: { ticks: { color: '#64748b', callback: v => ((CURRENCIES[data.baseCurrency]||{}).symbol||'') + v.toLocaleString() }, grid: { color: '#334155' } } }
+  };
+}
+
+// Vertical gradient fill for bar/area charts (fades to transparent at the bottom).
+function barGradient(color) {
+  return (c) => {
+    const { ctx, chartArea } = c.chart;
+    if (!chartArea) return color;
+    const g = ctx.createLinearGradient(0, chartArea.bottom, 0, chartArea.top);
+    g.addColorStop(0, color + '33');
+    g.addColorStop(1, color);
+    return g;
   };
 }
 
 function donutOpts() {
   return {
     responsive: true, maintainAspectRatio: false, cutout: '65%',
+    animation: { animateRotate: true, animateScale: true, duration: 800, easing: 'easeOutQuart' },
     plugins: { tooltip: { backgroundColor: '#1e293b', borderColor: '#334155', borderWidth: 1, titleColor: '#f1f5f9', bodyColor: '#94a3b8', callbacks: { label: ctx => ' ' + formatCurrency(ctx.parsed) } } }
   };
 }
