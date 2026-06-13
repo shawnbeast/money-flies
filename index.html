@@ -3126,11 +3126,48 @@ function saveExpense(andAnother) {
   }
 }
 
+// 3-way dialog for deleting one vs the whole recurring series.
+function showSeriesDialog(count) {
+  return new Promise(resolve => {
+    const host = document.createElement('div');
+    host.className = 'modal-bg fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4';
+    host.innerHTML = `
+      <div class="card w-full sm:max-w-sm p-6 space-y-4 rounded-t-2xl sm:rounded-2xl">
+        <p class="text-slate-200 text-sm leading-relaxed">This is part of a recurring series of <b>${count}</b> expenses. What do you want to delete?</p>
+        <div class="space-y-2">
+          <button data-all class="w-full bg-red-500 hover:bg-red-600 text-white rounded-lg py-2.5 text-sm font-semibold transition-colors">Delete all ${count} in the series</button>
+          <button data-one class="w-full bg-slate-700 hover:bg-slate-600 text-white rounded-lg py-2.5 text-sm font-medium transition-colors">Delete only this one</button>
+          <button data-x class="w-full text-slate-400 hover:text-white rounded-lg py-2 text-sm transition-colors">Cancel</button>
+        </div>
+      </div>`;
+    const close = v => { host.remove(); resolve(v); };
+    host.addEventListener('click', e => { if (e.target === host) close(null); });
+    host.querySelector('[data-all]').onclick = () => close('all');
+    host.querySelector('[data-one]').onclick = () => close('one');
+    host.querySelector('[data-x]').onclick = () => close(null);
+    document.body.appendChild(host);
+  });
+}
+
 async function deleteExpense(id) {
+  const e = data.expenses.find(x => x.id === id);
+  if (!e) return;
+  // Finite series created via "repeat until a date" → offer one vs whole series
+  const series = (e.recurringId && String(e.recurringId).startsWith('series_'))
+    ? data.expenses.filter(x => x.recurringId === e.recurringId) : [];
+  if (series.length > 1) {
+    const choice = await showSeriesDialog(series.length);
+    if (!choice) return;
+    if (choice === 'all') {
+      data.expenses = data.expenses.filter(x => x.recurringId !== e.recurringId);
+      saveData(data); showToast(`Deleted ${series.length} ✓`); render(); return;
+    }
+    data.expenses = data.expenses.filter(x => x.id !== id);
+    saveData(data); showToast('Deleted ✓'); render(); return;
+  }
   if (!(await showConfirm('Delete this expense?', { danger: true, confirmText: 'Delete' }))) return;
-  data.expenses = data.expenses.filter(e => e.id !== id);
-  saveData(data);
-  render();
+  data.expenses = data.expenses.filter(x => x.id !== id);
+  saveData(data); showToast('Deleted ✓'); render();
 }
 
 function updateIncome(val) {
