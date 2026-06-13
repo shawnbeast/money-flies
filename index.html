@@ -286,6 +286,34 @@ function getCategoryById(id) {
   return data.categories.find(c => c.id === id) || { name: 'Unknown', color: '#94a3b8', icon: '📦' };
 }
 
+// ─── Auto-categorization ────────────────────────────────────────────────────
+// Each rule: candidate category names/ids (first existing wins) + merchant keywords.
+const MERCHANT_RULES = [
+  { to: ['Groceries', 'Food & Dining', 'food'], kws: ['LUFA','MERCADONA','CARREFOUR','LIDL','ALCAMPO','CONDIS','CAPRABO','DIA ','WHOLE FOODS','IGA','METRO PLUS','PROVIGO','MAXI','COSTCO','SUPERC','EPICERIE','GROCERY','MARCHE','NUTS N SPICES','SHREE MITHAI','ALIMENT','SUPERMARC'] },
+  { to: ['Food & Dining', 'food'], kws: ['RESTAUR','RESTO','BAR ','BURGER','BURGUER','CAFE','COFFE','STARBUCK','MCDON','MCDONALD','A&W','SUBWAY','TIM HORTON','PIZZ','SUSHI','TACO','KEBAB','DONER','TAPAS','BODEGA','PANAD','BOULANG','POULET','GLOVO','UBER EATS','DOORDASH','SKIP','CATERGEST','MONTADIT','CONDESA','DEMASIE','CRIJOSE','SANTA GLORIA','CARLOS PEPES','LA PICARA','LA PORRITA','DELIKIA','VENDING','BISTRO','GRILL','CAFETERIA','PUB','BRASSERIE'] },
+  { to: ['Transport', 'transport'], kws: ['UBER','LYFT','CABIFY','GRAB','BOLT','TAXI','METRO','RENFE','OUIGO',' AVE ','CERCANIAS','FLIXBUS','VUELING','RYANAIR','IBERIA','TAP AIR','TAP PORTUGAL','AIR CANADA','WESTJET','PORTER','AENA','AUTOBUS','ESTACIO','RECORD GO','ALQUILER','PARKING','PEAJE','CARBURANT','SOLANAS','PETRO','SHELL','ESSO','COUCHE','GAS ','STATION','KIWI.COM','GO INDIGO','POPARIDE','VIA RAIL','RODALIES','TRANSIT','TRAIN','RENTAL','SIXT','HERTZ','EUROPCAR'] },
+  { to: ['Health', 'health'], kws: ['CLINIQUE','NOMADE','PHARMA','FARMAC','JEAN COUTU','PROXIM','UNIPRIX','DENTAIRE','DENTAL','HOPITAL','ECONOFITNESS','FITNESS','GYM','FIRST MED','MEDIC','HERBOLARIO','OPTIQUE','PHYSIO'] },
+  { to: ['Entertainment', 'entertainment'], kws: ['NETFLIX','DISNEY','DAZN','PRIMEVIDEO','PRIME VIDEO','SPOTIFY','CINEMA','CINEPLEX','STEAM','PLAYSTATION','XBOX','TWITCH','APPLE.COM/BILL','GOOGLE','YOUTUBE','HBO','CRAVE','TICKET','TEATRO','MUSEO','MUSEU','DISCOTEC'] },
+  { to: ['Cellphone', 'Utilities', 'utilities'], kws: ['BELL','FIDO','TELUS','KOODO','VIRGIN','FIZZ','ROGERS'] },
+  { to: ['Utilities', 'utilities'], kws: ['VIDEOTRON','HYDRO','INTERNET','ELECTRIC'] },
+  { to: ['Airbnb / Hotel', 'Travel', 'Other', 'other'], kws: ['AIRBNB','BOOKING','HOTEL','RESORT','HOSTEL','RIAD','B.V.','RAILAY','EXPEDIA','HOSTELWORLD','MOTEL','LODGE'] },
+  { to: ['Shopping', 'shopping'], kws: ['AMAZON','AMZN','WALMART','DOLLARAMA','CANADIAN TIRE','BEST BUY','SIMONS','WINNERS','ZARA','H&M','DECATHLON','PRIMARK','PULL AND BEAR','PULL&BEAR','BERSHKA','MANGO','MISAKO','PERFUMERIA','PRIMOR','SEPHORA','ASICS','TOUS','SQUARE','SHOPIFY','STORE','BOUTIQUE','APPLE STORE'] },
+];
+function resolveCatId(names) {
+  for (const n of names) {
+    const hit = data.categories.find(c => c.id === n || c.name.toLowerCase() === String(n).toLowerCase());
+    if (hit) return hit.id;
+  }
+  return null;
+}
+function autoGuessCategoryId(desc) {
+  const u = (desc || '').toUpperCase();
+  for (const rule of MERCHANT_RULES) {
+    if (rule.kws.some(k => u.includes(k))) { const id = resolveCatId(rule.to); if (id) return id; }
+  }
+  return null;
+}
+
 function getGroupById(id) {
   return data.groups.find(g => g.id === id) || null;
 }
@@ -1454,6 +1482,7 @@ function buildExpenses() {
     <div class="px-5 py-4 border-b border-slate-700 flex items-center justify-between gap-2">
       <h3 class="font-semibold text-slate-200">${exps.length} ${exps.length===1?'expense':'expenses'}${activeCount?' (filtered)':''}</h3>
       <div class="flex gap-2">
+        ${data.expenses.filter(e => e.categoryId === 'other').length ? `<button onclick="autoCategorize()" title="Auto-categorize Other expenses" class="rounded-lg px-3 py-1.5 text-sm font-medium bg-slate-700 text-slate-300 hover:bg-slate-600 transition-colors">✨ Auto</button>` : ''}
         ${exps.length ? `<button onclick="toggleSelectMode()" class="rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${selectMode?'tab-active text-white':'bg-slate-700 text-slate-300 hover:bg-slate-600'}">${selectMode?'Done':'Select'}</button>` : ''}
         <button onclick="openExpenseModal()" class="btn-primary text-white rounded-lg px-3 py-1.5 text-sm font-medium">+ Add</button>
       </div>
@@ -2642,7 +2671,7 @@ function doImportTxns() {
     existing.add(key);
     data.expenses.push({
       id: uuid(), description: r.description, origAmount: amt, currency: data.baseCurrency, amount: amt,
-      date: r.date, categoryId: known.has(r.category) ? r.category : 'other', cardId, groupId, note: '', createdAt: new Date().toISOString(),
+      date: r.date, categoryId: (known.has(r.category) && r.category !== 'other') ? r.category : (autoGuessCategoryId(r.description) || (known.has(r.category) ? r.category : 'other')), cardId, groupId, note: '', createdAt: new Date().toISOString(),
     });
     added++;
   });
@@ -3037,6 +3066,20 @@ function bulkSetField(field, v) {
   data.expenses.forEach(e => { if (selectedIds.has(e.id)) e[field] = val; });
   saveData(data); showToast(`Updated ${selectedIds.size} ✓`); render();
 }
+async function autoCategorize() {
+  const targets = data.expenses.filter(e => e.categoryId === 'other' || !data.categories.find(c => c.id === e.categoryId));
+  const changes = [];
+  targets.forEach(e => { const g = autoGuessCategoryId(e.description); if (g && g !== e.categoryId) changes.push([e, g]); });
+  if (!changes.length) { showToast('Nothing to auto-categorize', 'error'); return; }
+  const byCat = {};
+  changes.forEach(([, g]) => { byCat[g] = (byCat[g] || 0) + 1; });
+  const breakdown = Object.entries(byCat).sort((a, b) => b[1] - a[1]).slice(0, 6)
+    .map(([id, n]) => `${getCategoryById(id).icon} ${getCategoryById(id).name} ${n}`).join(' · ');
+  if (!(await showConfirm(`Auto-categorize ${changes.length} “Other” expense${changes.length > 1 ? 's' : ''}?<br><span class="text-xs text-slate-400">${breakdown}</span>`, { confirmText: 'Recategorize' }))) return;
+  changes.forEach(([e, g]) => { e.categoryId = g; });
+  saveData(data); showToast(`Recategorized ${changes.length} ✓`); render();
+}
+
 async function bulkDelete() {
   if (!selectedIds.size) return;
   if (!(await showConfirm(`Delete ${selectedIds.size} selected expense${selectedIds.size > 1 ? 's' : ''}? This cannot be undone.`, { danger: true, confirmText: 'Delete' }))) return;
