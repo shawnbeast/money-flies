@@ -206,7 +206,6 @@ let editingIncome = null;
 let showRecurringModal = false;
 let editingRecurring = null;
 let showCustomizeModal = false; // dashboard layout editor
-let showThemeModal = false; // accent color picker
 let showWrapped = false; // monthly recap card
 let wrappedMonth = new Date().toISOString().slice(0, 7);
 let showImportTxnModal = false; // bank CSV importer
@@ -719,35 +718,12 @@ function buildLayout() {
   ${showIncomeModal ? buildIncomeModal() : ''}
   ${showRecurringModal ? buildRecurringModal() : ''}
   ${showCustomizeModal ? buildCustomizeModal() : ''}
-  ${showThemeModal ? buildThemeModal() : ''}
   ${showWrapped ? buildWrapped() : ''}
   ${showImportTxnModal ? buildImportTxnModal() : ''}
   `;
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
-function buildPeriodBar() {
-  const r = periodRange();
-  const presets = [
-    { id: 'thisMonth', label: 'This Month' },
-    { id: 'lastMonth', label: 'Last Month' },
-    { id: 'last3',     label: 'Last 3 Months' },
-    { id: 'ytd',       label: 'Year to Date' },
-  ];
-  return `
-  <div class="card rounded-xl p-4 flex flex-wrap items-center gap-2">
-    <span class="text-xs text-slate-400 uppercase tracking-wider mr-1">Period</span>
-    ${presets.map(p => `
-      <button onclick="setPreset('${p.id}')" class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${dashPeriod.preset===p.id ? 'tab-active text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}">${p.label}</button>
-    `).join('')}
-    <div class="flex items-center gap-2 ml-auto flex-wrap">
-      <span class="text-xs text-slate-500 ${dashPeriod.preset==='custom'?'text-indigo-400':''}">Custom:</span>
-      <input type="date" id="rangeStart" value="${r.start}" onchange="applyCustomRange()" class="input-field rounded-lg px-2 py-1.5 text-sm" />
-      <span class="text-slate-500 text-sm">→</span>
-      <input type="date" id="rangeEnd" value="${r.end}" onchange="applyCustomRange()" class="input-field rounded-lg px-2 py-1.5 text-sm" />
-    </div>
-  </div>`;
-}
 
 // Available dashboard widgets (order here = default order).
 const DASHBOARD_WIDGETS = [
@@ -1064,14 +1040,6 @@ function buildDashboard() {
 }
 
 // Compact, tidy dashboard toolbar: view selector + actions on one row, period filter below.
-function scopeLabel(s) {
-  if (!s) return '';
-  const parts = [];
-  if (s.groupId) { const g = getGroupById(s.groupId); if (g) parts.push(g.icon + ' ' + g.name); }
-  if (s.cardId) { const c = getCardById(s.cardId); if (c) parts.push(c.icon + ' ' + c.name); }
-  if (s.categoryId) { const c = getCategoryById(s.categoryId); parts.push(c.icon + ' ' + c.name); }
-  return parts.join(' · ');
-}
 
 function buildDashboardToolbar() {
   ensureDashboards();
@@ -2554,28 +2522,6 @@ function buildCustomizeModal() {
   </div>`;
 }
 
-function buildThemeModal() {
-  const cur = (data.accent) || 'indigo';
-  return `
-  <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
-    <div class="card rounded-2xl w-full max-w-sm p-6 space-y-4" onclick="event.stopPropagation()">
-      <div class="flex items-center justify-between">
-        <h2 class="font-semibold text-lg">🎨 Appearance</h2>
-        <button onclick="closeThemeModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
-      </div>
-      <p class="text-xs text-slate-400 -mt-2">Pick your accent color. Saved to your account.</p>
-      <div class="grid grid-cols-2 gap-3">
-        ${ACCENT_PRESETS.map(p => `
-          <button onclick="setAccent('${p.id}')" class="flex items-center gap-3 rounded-xl p-3 border transition-colors ${cur===p.id ? 'border-white/70 bg-slate-700/50' : 'border-slate-700 hover:bg-slate-700/40'}">
-            <span class="w-8 h-8 rounded-full flex-shrink-0" style="background:linear-gradient(135deg,${p.c1},${p.c2})"></span>
-            <span class="text-sm text-slate-200">${p.name}</span>
-            ${cur===p.id ? '<span class="ml-auto text-white">✓</span>' : ''}
-          </button>`).join('')}
-      </div>
-      <button onclick="closeThemeModal()" class="w-full btn-primary text-white rounded-lg py-2.5 text-sm font-medium transition-all">Done</button>
-    </div>
-  </div>`;
-}
 
 function buildImportTxnModal() {
   const rows = importTxnRows;
@@ -2850,16 +2796,6 @@ function chartOpts() {
 }
 
 // Vertical gradient fill for bar/area charts (fades to transparent at the bottom).
-function barGradient(color) {
-  return (c) => {
-    const { ctx, chartArea } = c.chart;
-    if (!chartArea) return color;
-    const g = ctx.createLinearGradient(0, chartArea.bottom, 0, chartArea.top);
-    g.addColorStop(0, color + '33');
-    g.addColorStop(1, color);
-    return g;
-  };
-}
 
 function donutOpts() {
   return {
@@ -2890,8 +2826,6 @@ const TAB_META = {
 function tabLabel(t) { const m = TAB_META[t]; return m ? `${m.icon} ${m.name}` : t; }
 function tabIcon(t) { return (TAB_META[t] || {}).icon || '•'; }
 function tabName(t) { return (TAB_META[t] || {}).name || t; }
-function toggleMenu(event) { event.stopPropagation(); showMenu = !showMenu; render(); }
-function closeMenu() { showMenu = false; render(); }
 function toggleAccountMenu(event) { event.stopPropagation(); showAccountMenu = !showAccountMenu; render(); }
 function closeAccountMenu() { showAccountMenu = false; render(); }
 
@@ -2951,94 +2885,13 @@ function setDashMonth(val) {
 
 function persistActivePeriod() { const d = ensureDashboards(); d.period = { ...dashPeriod }; saveData(data); }
 
-function switchDashboard(id) {
-  ensureDashboards();
-  data.activeDashboardId = id;
-  const d = data.dashboards.find(x => x.id === id);
-  if (d && d.period) dashPeriod = { ...d.period };
-  saveData(data);
-  render();
-}
 
-function createDashboard() {
-  ensureDashboards();
-  const d = { id: uuid(), name: 'Dashboard ' + (data.dashboards.length + 1), layout: defaultLayout(), period: { ...dashPeriod } };
-  data.dashboards.push(d);
-  data.activeDashboardId = d.id;
-  saveData(data);
-  showCustomizeModal = true; // open so they can rename / configure right away
-  render();
-}
 
-function renameDashboard(val) {
-  const d = ensureDashboards();
-  d.name = (val || '').trim() || 'Untitled';
-  saveData(data);
-  render();
-}
 
-function setDashIcon(em) { const d = ensureDashboards(); d.icon = em; saveData(data); render(); }
 
-function duplicateDashboard() {
-  const src = ensureDashboards();
-  const copy = JSON.parse(JSON.stringify(src));
-  copy.id = uuid();
-  copy.name = src.name + ' (copy)';
-  data.dashboards.push(copy);
-  data.activeDashboardId = copy.id;
-  saveData(data);
-  showToast('Dashboard duplicated ✓');
-  render();
-}
 
-function setDashScope(field, val) {
-  const d = ensureDashboards();
-  if (!d.scope) d.scope = { groupId: '', cardId: '', categoryId: '' };
-  d.scope[field] = val;
-  saveData(data);
-  render();
-}
-function clearDashScope() {
-  const d = ensureDashboards();
-  d.scope = { groupId: '', cardId: '', categoryId: '' };
-  saveData(data);
-  render();
-}
 
-function addCustomKpi() {
-  const d = ensureDashboards();
-  const label = document.getElementById('ckpi_label').value.trim();
-  const metric = document.getElementById('ckpi_metric').value;
-  const categoryId = document.getElementById('ckpi_cat').value || '';
-  const cardId = document.getElementById('ckpi_card').value || '';
-  if (!label) { showToast('Give the tile a name.', 'error'); return; }
-  if (!Array.isArray(d.customKpis)) d.customKpis = [];
-  d.customKpis.push({ id: uuid(), label, metric, categoryId, cardId });
-  // make sure the custom-KPIs section is visible
-  const layout = getDashboardLayout();
-  const w = layout.find(l => l.id === 'customKpis'); if (w) w.visible = true;
-  saveData(data);
-  showToast('Tile added ✓');
-  render();
-}
-function deleteCustomKpi(id) {
-  const d = ensureDashboards();
-  d.customKpis = (d.customKpis || []).filter(t => t.id !== id);
-  saveData(data);
-  render();
-}
 
-async function deleteDashboard() {
-  ensureDashboards();
-  if (data.dashboards.length <= 1) { showToast('You need at least one dashboard.', 'error'); return; }
-  if (!(await showConfirm('Delete this dashboard? (Your expenses and data are not affected.)', { danger: true, confirmText: 'Delete' }))) return;
-  data.dashboards = data.dashboards.filter(d => d.id !== data.activeDashboardId);
-  data.activeDashboardId = data.dashboards[0].id;
-  if (data.dashboards[0].period) dashPeriod = { ...data.dashboards[0].period };
-  showCustomizeModal = false;
-  saveData(data);
-  render();
-}
 
 function viewGroup(id) { expenseFilters = { ...emptyFilters(), groupId: id }; activeTab = 'expenses'; render(); }
 
@@ -3141,8 +2994,6 @@ function closeCardModal() { showCardModal = false; editingCard = null; render();
 function closePayrollModal() { showPayrollModal = false; editingPayroll = null; render(); }
 function openCustomizeModal() { showCustomizeModal = true; showMenu = false; render(); }
 function closeCustomizeModal() { showCustomizeModal = false; render(); }
-function openThemeModal() { showThemeModal = true; render(); }
-function closeThemeModal() { showThemeModal = false; render(); }
 function openImportTxnModal() { importTxnRows = null; showImportTxnModal = true; render(); }
 function closeImportTxnModal() { showImportTxnModal = false; importTxnRows = null; render(); }
 function setAccent(id) { data.accent = id; saveData(data); applyTheme(); showToast('Theme updated ✓'); render(); }
@@ -3192,7 +3043,7 @@ function resetDashboardLayout() {
   saveDashboardLayout(defaultLayout());
   render();
 }
-function closeModal(event) { if (event.target === event.currentTarget) { showExpenseModal = showCategoryModal = showGroupModal = showCardModal = showPayrollModal = showIncomeModal = showRecurringModal = showCustomizeModal = showThemeModal = showImportTxnModal = false; editingExpense = editingCategory = editingGroup = editingCard = editingPayroll = editingIncome = editingRecurring = null; render(); } }
+function closeModal(event) { if (event.target === event.currentTarget) { showExpenseModal = showCategoryModal = showGroupModal = showCardModal = showPayrollModal = showIncomeModal = showRecurringModal = showCustomizeModal = showImportTxnModal = false; editingExpense = editingCategory = editingGroup = editingCard = editingPayroll = editingIncome = editingRecurring = null; render(); } }
 
 function updateConvertPreview() {
   const el = document.getElementById('convertPreview');
