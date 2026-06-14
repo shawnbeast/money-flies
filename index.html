@@ -1144,7 +1144,7 @@ function buildHelp() {
       ${section('📋', 'Track expenses', 'Tap <b>+ Add Expense</b> anytime. Set the amount, pick a category, the card you paid with, and optionally a trip. Add it in any currency — it converts to CAD automatically.')}
       ${section('🔎', 'Find anything', 'In <b>Expenses</b>, tap <b>Show filters</b> to combine filters: category, card, trip, date range, amount — plus a search box. The total updates to match.')}
       ${section('📊', 'Dashboards', 'The <b>Dashboard</b> shows your KPIs: spent, earned, net, savings rate, % per category and per card. Pick a time period (This Month, custom range…) up top.')}
-      ${section('🎨', 'Customize & multiple dashboards', 'Tap <b>⚙️</b> on the dashboard to show/hide and reorder sections. Create several dashboards (e.g. “Everyday”, “Trip”) with the <b>＋</b> button — each keeps its own layout & period.')}
+      ${section('🎨', 'Customize your dashboard', 'Tap <b>⚙️</b> on the dashboard to turn sections on/off and drag to reorder them. Pick a period or a specific month up top.')}
       ${section('💵', 'Income', 'In <b>Income</b>: add recurring <b>payroll</b> (with payday schedule), one-time <b>other income</b> (gifts, side gigs…), and see your monthly, projected-yearly and net figures.')}
       ${section('🔁', 'Recurring expenses', 'In <b>Budgets</b> → <b>Recurring Expenses</b>: add rent, subscriptions, fees. They’re auto-added as expenses on each due date and counted everywhere.')}
       ${section('💳', 'Cards', 'Add your credit/debit cards in <b>Cards</b>. Tag each expense with the card used and see spending + credit usage per card.')}
@@ -1626,6 +1626,7 @@ function buildCards() {
   const unassigned = monthExps.filter(e => !e.cardId).reduce((s,e)=>s+expenseBase(e),0);
   return `
   <div class="space-y-6">
+    ${monthNav()}
     <div class="card rounded-xl p-5 flex items-center gap-4 flex-wrap">
       <span class="text-2xl">💳</span>
       <div class="flex-1 min-w-[200px]">
@@ -1720,6 +1721,7 @@ function buildIncome() {
 
   return `
   <div class="space-y-6">
+    ${monthNav()}
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
       ${kpiCard('Income — ' + monthLabel(activeMonth), formatCurrency(monthIncome), monthOneTime > 0 ? `incl. ${formatCurrency(monthOneTime)} other income` : 'for the displayed month', '#22c55e', '💵')}
       ${kpiCard('Projected income (' + yr + ')', formatCurrency(yProjected), 'full-year estimate', '#06b6d4', '🗓️')}
@@ -1855,6 +1857,7 @@ function buildBudgets() {
   const { byCategory } = getMonthTotals(activeMonth);
   return `
   <div class="space-y-6">
+    ${monthNav()}
     <!-- Category budgets -->
     <div class="card rounded-xl overflow-hidden">
       <div class="px-5 py-4 border-b border-slate-700 flex items-center justify-between">
@@ -2898,6 +2901,17 @@ function shiftMonth(delta) {
   const d = new Date(y, m - 1 + delta, 1);
   activeMonth = d.toISOString().slice(0, 7);
   render();
+}
+
+// Compact month switcher used by Cards / Income / Budgets (which read activeMonth).
+function monthNav() {
+  const lbl = new Date(activeMonth + '-02').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  return `
+  <div class="flex items-center justify-center gap-3">
+    <button onclick="shiftMonth(-1)" aria-label="Previous month" class="w-8 h-8 rounded-lg bg-slate-700/60 hover:bg-slate-600 text-slate-200 flex items-center justify-center text-lg leading-none transition-colors">‹</button>
+    <span class="text-sm font-semibold text-slate-200 w-36 text-center">${lbl}</span>
+    <button onclick="shiftMonth(1)" aria-label="Next month" class="w-8 h-8 rounded-lg bg-slate-700/60 hover:bg-slate-600 text-slate-200 flex items-center justify-center text-lg leading-none transition-colors">›</button>
+  </div>`;
 }
 
 function setPreset(id) {
