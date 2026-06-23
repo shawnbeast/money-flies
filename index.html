@@ -94,6 +94,19 @@
 // ─── Data layer ───────────────────────────────────────────────────────────────
 const STORAGE_KEY = 'budget_tracker_v1';
 
+// ─── Local date helpers ───────────────────────────────────────────────────────
+// Build YYYY-MM-DD / YYYY-MM from a Date using its LOCAL calendar fields.
+// IMPORTANT: never use new Date().toISOString().slice(...) for "today"/"this month"
+// anchors — toISOString() converts to UTC first, so for users whose offset crosses
+// midnight it returns the wrong day/month. Expense dates come from <input type="date">
+// (already local), so date anchors must be local too or they won't line up.
+function localDateStr(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function localMonthStr(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
 const DEFAULT_CATEGORIES = [
   { id: 'food',        name: 'Food & Dining',    color: '#f59e0b', icon: '🍔', budget: 500  },
   { id: 'transport',   name: 'Transport',         color: '#3b82f6', icon: '🚗', budget: 200  },
@@ -190,7 +203,7 @@ function saveData(d) {
 
 let data = loadData();
 let activeTab = 'dashboard';
-let activeMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+let activeMonth = localMonthStr(); // YYYY-MM
 let showExpenseModal = false;
 let editingExpense = null;
 let showCategoryModal = false;
@@ -207,7 +220,7 @@ let showRecurringModal = false;
 let editingRecurring = null;
 let showCustomizeModal = false; // dashboard layout editor
 let showWrapped = false; // monthly recap card
-let wrappedMonth = new Date().toISOString().slice(0, 7);
+let wrappedMonth = localMonthStr();
 let showImportTxnModal = false; // bank CSV importer
 let importTxnRows = null; // parsed rows awaiting import
 let showMenu = false; // "More" nav dropdown
@@ -219,7 +232,7 @@ let filtersOpen = false; // advanced filter panel expanded
 let selectMode = false; // bulk-select mode in Expenses
 let selectedIds = new Set(); // selected expense ids for bulk actions
 // Dashboard time-period filter (independent of the header month picker).
-let dashPeriod = { mode: 'month', preset: 'thisMonth', month: new Date().toISOString().slice(0, 7), start: null, end: null };
+let dashPeriod = { mode: 'month', preset: 'thisMonth', month: localMonthStr(), start: null, end: null };
 let chartInstances = {};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -379,14 +392,14 @@ function payDatesInRange(p, from, to) {
   };
   while (d < start && guard++ < 2000) step(d);
   guard = 0;
-  while (d <= end && guard++ < 2000) { dates.push(d.toISOString().slice(0,10)); step(d); }
+  while (d <= end && guard++ < 2000) { dates.push(localDateStr(d)); step(d); }
   return dates;
 }
 
 // Materialize recurring expenses into real expense entries up to today (no duplicates).
 function generateRecurringExpenses() {
   if (!Array.isArray(data.recurringExpenses) || data.recurringExpenses.length === 0) return false;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateStr();
   let added = false;
   data.recurringExpenses.forEach(r => {
     if (r.active === false || !r.startDate) return;
@@ -407,9 +420,9 @@ function generateRecurringExpenses() {
 }
 
 function nextPayday() {
-  const today = new Date().toISOString().slice(0,10);
+  const today = localDateStr();
   const future = new Date(); future.setDate(future.getDate() + 90);
-  const horizon = future.toISOString().slice(0,10);
+  const horizon = localDateStr(future);
   let best = null;
   data.payrolls.forEach(p => {
     payDatesInRange(p, today, horizon).forEach(dt => {
@@ -501,7 +514,7 @@ function getLast6Months() {
     const d = new Date();
     d.setDate(1);
     d.setMonth(d.getMonth() - i);
-    months.push(d.toISOString().slice(0, 7));
+    months.push(localMonthStr(d));
   }
   return months;
 }
@@ -526,7 +539,7 @@ function computeForecast() {
   const future = [], fvals = [];
   for (let k = 1; k <= 6; k++) {
     const d = new Date(now.getFullYear(), now.getMonth() + k, 1);
-    future.push(d.toISOString().slice(0, 7));
+    future.push(localMonthStr(d));
     fvals.push(Math.max(0, a + b * (5 + k)));
   }
   const projTotal = fvals.reduce((s, v) => s + v, 0);
@@ -598,11 +611,19 @@ let _animate = false; // play entrance animations on this render (set on tab swi
 function render() {
   _monthTotalsCache = {}; // fresh per render (data/currency may have changed)
   const app = document.getElementById('app');
+  const prevScroll = window.scrollY; // preserve scroll across the full innerHTML rebuild
   app.innerHTML = buildLayout();
   attachEvents();
   const doAnim = _animate;
   // Defer charts one frame so the UI paints instantly, then charts fill in.
-  requestAnimationFrame(() => { renderCharts(); if (doAnim) animateCounters(); if (activeTab === 'planner') updatePlanRemaining(); });
+  requestAnimationFrame(() => {
+    renderCharts();
+    if (doAnim) animateCounters();
+    if (activeTab === 'planner') updatePlanRemaining();
+    // A genuine tab switch (doAnim) starts at the top; any other re-render
+    // (filter, delete, checkbox, modal open/close) keeps the user where they were.
+    window.scrollTo(0, doAnim ? 0 : prevScroll);
+  });
   _animate = false;
 }
 
@@ -793,8 +814,8 @@ function buildDashboard() {
   const widgets = {
     insights: () => {
       const now = new Date();
-      const thisM = now.toISOString().slice(0, 7);
-      const lastM = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 7);
+      const thisM = localMonthStr(now);
+      const lastM = localMonthStr(new Date(now.getFullYear(), now.getMonth() - 1, 1));
       const tThis = getMonthTotals(thisM).total, tLast = getMonthTotals(lastM).total;
       const items = [];
       if (tLast > 0) {
@@ -1477,8 +1498,8 @@ function buildExpenses() {
       // group rendered rows by day, with per-day subtotals computed over ALL filtered expenses
       const dayTotals = {};
       exps.forEach(e => { dayTotals[e.date] = (dayTotals[e.date] || 0) + expenseBase(e); });
-      const todayStr = new Date().toISOString().slice(0, 10);
-      const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().slice(0, 10); })();
+      const todayStr = localDateStr();
+      const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return localDateStr(d); })();
       const dayLabel = d => d === todayStr ? 'Today' : d === yesterday ? 'Yesterday'
         : new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
       const row = e => {
@@ -1664,8 +1685,8 @@ function buildIncome() {
   const payrolls = data.payrolls;
   const monthly = totalMonthlyIncome();
   const next = nextPayday();
-  const today = new Date().toISOString().slice(0,10);
-  const horizon = (() => { const d = new Date(); d.setDate(d.getDate()+60); return d.toISOString().slice(0,10); })();
+  const today = localDateStr();
+  const horizon = (() => { const d = new Date(); d.setDate(d.getDate()+60); return localDateStr(d); })();
   // upcoming paydays across all payrolls, sorted
   let upcoming = [];
   payrolls.forEach(p => payDatesInRange(p, today, horizon).forEach(dt => upcoming.push({ date: dt, payroll: p })));
@@ -1681,7 +1702,7 @@ function buildIncome() {
   const yr = new Date().getFullYear();
   const yStart = yr + '-01-01';
   const yEnd = yr + '-12-31';
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = localDateStr();
   const yEarned = earnedInRange(yStart, todayStr);   // payroll YTD + one-time/other income YTD
   const ySpent = rangeTotals(yStart, todayStr).total;
   const yNet = yEarned - ySpent;
@@ -2001,7 +2022,7 @@ function buildSettings() {
 }
 
 // ─── Money Flies Wrapped (monthly recap) ────────────────────────────────────────
-function prevMonthStr(m) { const [y, mo] = m.split('-').map(Number); const d = new Date(y, mo - 2, 1); return d.toISOString().slice(0, 7); }
+function prevMonthStr(m) { const [y, mo] = m.split('-').map(Number); const d = new Date(y, mo - 2, 1); return localMonthStr(d); }
 function wrappedStats(month) {
   const exps = data.expenses.filter(e => e.date.startsWith(month));
   const total = exps.reduce((s, e) => s + expenseBase(e), 0);
@@ -2063,9 +2084,9 @@ function buildWrapped() {
   </div>`;
 }
 
-function openWrapped() { wrappedMonth = new Date().toISOString().slice(0, 7); showWrapped = true; showAccountMenu = false; render(); requestAnimationFrame(animateCounters); }
+function openWrapped() { wrappedMonth = localMonthStr(); showWrapped = true; showAccountMenu = false; render(); requestAnimationFrame(animateCounters); }
 function closeWrapped() { showWrapped = false; render(); }
-function wrappedShift(d) { const [y, mo] = wrappedMonth.split('-').map(Number); wrappedMonth = new Date(y, mo - 1 + d, 1).toISOString().slice(0, 7); render(); requestAnimationFrame(animateCounters); }
+function wrappedShift(d) { const [y, mo] = wrappedMonth.split('-').map(Number); wrappedMonth = localMonthStr(new Date(y, mo - 1 + d, 1)); render(); requestAnimationFrame(animateCounters); }
 function shareWrapped() {
   const s = wrappedStats(wrappedMonth);
   const monthName = new Date(wrappedMonth + '-02').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
@@ -2079,7 +2100,7 @@ function shareWrapped() {
 // ─── Modals ───────────────────────────────────────────────────────────────────
 function buildExpenseModal() {
   const e = editingExpense;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateStr();
   // For a NEW expense, pre-select the last category/card you used (faster repeat entry on mobile).
   const lastExp = data.expenses.length ? data.expenses[data.expenses.length - 1] : null;
   const defCat = e ? e.categoryId : (lastExp ? lastExp.categoryId : (data.categories[0] && data.categories[0].id));
@@ -2369,7 +2390,7 @@ function buildPayrollModal() {
         </div>
         <div>
           <label class="text-xs text-slate-400 uppercase tracking-wider">First / next pay date *</label>
-          <input id="pay_start" type="date" value="${p?.startDate||new Date().toISOString().slice(0,10)}"
+          <input id="pay_start" type="date" value="${p?.startDate||localDateStr()}"
             class="input-field w-full rounded-lg px-3 py-2.5 mt-1" />
         </div>
       </div>
@@ -2383,7 +2404,7 @@ function buildPayrollModal() {
 
 function buildIncomeModal() {
   const i = editingIncome;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateStr();
   return `
   <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
     <div class="card rounded-2xl w-full max-w-sm p-6 space-y-4" onclick="event.stopPropagation()">
@@ -2429,7 +2450,7 @@ function buildIncomeModal() {
 
 function buildRecurringModal() {
   const r = editingRecurring;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateStr();
   return `
   <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
     <div class="card rounded-2xl w-full max-w-md p-6 space-y-4 max-h-[90vh] overflow-y-auto scrollbar-thin" onclick="event.stopPropagation()">
@@ -2634,6 +2655,11 @@ function doImportTxns() {
 
 // ─── Chart rendering ──────────────────────────────────────────────────────────
 function renderCharts() {
+  const chartTab = (activeTab === 'dashboard' || activeTab === 'cards');
+  // Skip the expensive teardown/rebuild on non-chart renders (filter typing,
+  // bulk-select, menus, modals). Still destroy once when leaving a chart tab so
+  // no Chart.js instances are left pointing at detached canvases.
+  if (!chartTab && Object.keys(chartInstances).length === 0) return;
   destroyCharts();
   if (activeTab === 'dashboard') { renderDashboardCharts(); renderAnalyticsCharts(); renderForecastChart(); }
   if (activeTab === 'cards') renderCardChart();
@@ -2833,7 +2859,7 @@ function switchTab(tab) { activeTab = tab; showMenu = false; selectMode = false;
 function shiftMonth(delta) {
   const [y, m] = activeMonth.split('-').map(Number);
   const d = new Date(y, m - 1 + delta, 1);
-  activeMonth = d.toISOString().slice(0, 7);
+  activeMonth = localMonthStr(d);
   render();
 }
 
@@ -2850,8 +2876,8 @@ function monthNav() {
 
 function setPreset(id) {
   const now = new Date();
-  const ymd = d => d.toISOString().slice(0, 10);
-  const ym = d => d.toISOString().slice(0, 7);
+  const ymd = localDateStr;
+  const ym = localMonthStr;
   if (id === 'thisMonth') {
     dashPeriod = { mode: 'month', preset: 'thisMonth', month: ym(now), start: null, end: null };
   } else if (id === 'lastMonth') {
@@ -2963,14 +2989,14 @@ async function resetAllData() {
   data = defaultData();
   activeTab = 'dashboard';
   expenseFilters = emptyFilters();
-  dashPeriod = { mode: 'month', preset: 'thisMonth', month: new Date().toISOString().slice(0, 7), start: null, end: null };
+  dashPeriod = { mode: 'month', preset: 'thisMonth', month: localMonthStr(), start: null, end: null };
   saveData(data); // also resets the cloud copy for the signed-in account
   render();
   showToast('All data reset — fresh start 🌱');
 }
 function setFilterDates(preset) {
   const now = new Date();
-  const ymd = d => d.toISOString().slice(0, 10);
+  const ymd = localDateStr;
   if (preset === 'all') { expenseFilters.start = ''; expenseFilters.end = ''; }
   else if (preset === 'thisMonth') { expenseFilters.start = ymd(new Date(now.getFullYear(), now.getMonth(), 1)); expenseFilters.end = ymd(new Date(now.getFullYear(), now.getMonth() + 1, 0)); }
   else if (preset === 'lastMonth') { expenseFilters.start = ymd(new Date(now.getFullYear(), now.getMonth() - 1, 1)); expenseFilters.end = ymd(new Date(now.getFullYear(), now.getMonth(), 0)); }
@@ -3074,7 +3100,7 @@ function toggleRecur() {
   document.getElementById('exp_recur_opts').classList.toggle('hidden', !on);
   if (on) {
     const until = document.getElementById('exp_recur_until');
-    if (!until.value) { const d = new Date(document.getElementById('exp_date').value + 'T12:00:00'); d.setMonth(d.getMonth() + 6); until.value = d.toISOString().slice(0, 10); }
+    if (!until.value) { const d = new Date(document.getElementById('exp_date').value + 'T12:00:00'); d.setMonth(d.getMonth() + 6); until.value = localDateStr(d); }
     document.getElementById('exp_recur_freq').onchange = updateRecurHint;
     until.onchange = updateRecurHint;
     updateRecurHint();
@@ -3409,7 +3435,7 @@ function exportData() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'money-flies-backup-' + new Date().toISOString().slice(0,10) + '.json';
+  a.download = 'money-flies-backup-' + localDateStr() + '.json';
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -3450,7 +3476,7 @@ function exportExcel() {
   }));
   if (recRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(recRows), 'Recurring');
 
-  XLSX.writeFile(wb, 'money-flies-' + new Date().toISOString().slice(0, 10) + '.xlsx');
+  XLSX.writeFile(wb, 'money-flies-' + localDateStr() + '.xlsx');
   showToast('Excel exported ✓');
 }
 
