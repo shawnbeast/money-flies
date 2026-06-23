@@ -163,7 +163,7 @@ let cloudSaveTimer = null; // debounce handle for cloud writes
 let authBusy = false;     // login in progress
 
 function defaultData() {
-  return { expenses: [], categories: DEFAULT_CATEGORIES, income: 3000, groups: [], cards: [], payrolls: [], oneTimeIncome: [], recurringExpenses: [],
+  return { expenses: [], categories: DEFAULT_CATEGORIES, income: 3000, groups: [], cards: [], payrolls: [], oneTimeIncome: [], recurringExpenses: [], merchantRules: [],
            accent: 'indigo', baseCurrency: 'CAD', rates: { base: 'USD', table: { ...FALLBACK_RATES }, fetchedAt: null } };
 }
 
@@ -178,6 +178,7 @@ function migrateData(parsed) {
   if (!parsed.payrolls) parsed.payrolls = [];
   if (!parsed.oneTimeIncome) parsed.oneTimeIncome = [];
   if (!parsed.recurringExpenses) parsed.recurringExpenses = [];
+  if (!Array.isArray(parsed.merchantRules)) parsed.merchantRules = [];
   if (!parsed.accent) parsed.accent = 'indigo';
   if (!parsed.baseCurrency) parsed.baseCurrency = 'CAD';
   if (!parsed.rates) parsed.rates = { base: 'USD', table: { ...FALLBACK_RATES }, fetchedAt: null };
@@ -321,10 +322,60 @@ function resolveCatId(names) {
 }
 function autoGuessCategoryId(desc) {
   const u = (desc || '').toUpperCase();
+  // User-trained rules win over the built-in heuristics.
+  for (const r of (data.merchantRules || [])) {
+    if (r.match && u.includes(r.match) && data.categories.some(c => c.id === r.categoryId)) return r.categoryId;
+  }
   for (const rule of MERCHANT_RULES) {
     if (rule.kws.some(k => u.includes(k))) { const id = resolveCatId(rule.to); if (id) return id; }
   }
   return null;
+}
+
+// Suggest a clean merchant keyword from a description (e.g. "STARBUCKS #455" -> "STARBUCKS").
+function merchantKeyword(desc) {
+  const tokens = (desc || '').toUpperCase().match(/[A-Z][A-Z&'.]{2,}/g) || [];
+  const skip = new Set(['THE','AND','LLC','INC','LTD','POS','PURCHASE','PAYMENT','CARD','DEBIT','VISA','PMT','WWW','COM']);
+  return tokens.find(t => !skip.has(t)) || tokens[0] || (desc || '').trim().toUpperCase();
+}
+
+// Create or update a user rule "this keyword -> this category".
+function setMerchantRule(match, categoryId) {
+  match = (match || '').toUpperCase().trim();
+  if (!match || !categoryId) return;
+  data.merchantRules = data.merchantRules || [];
+  const existing = data.merchantRules.find(r => r.match === match);
+  if (existing) existing.categoryId = categoryId;
+  else data.merchantRules.push({ id: uuid(), match, categoryId });
+  saveData(data);
+}
+
+function deleteMerchantRule(id) {
+  data.merchantRules = (data.merchantRules || []).filter(r => r.id !== id);
+  saveData(data);
+  render();
+}
+
+function addMerchantRuleFromForm() {
+  const m = document.getElementById('ruleMatchInput'), c = document.getElementById('ruleCatSelect');
+  if (!m || !c) return;
+  if (!m.value.trim()) { showToast('Enter a keyword', 'error'); return; }
+  setMerchantRule(m.value, c.value);
+  showToast('Rule saved ✓');
+  render();
+}
+
+// After a manual recategorization, offer to remember it as a rule for next time.
+async function offerMerchantRule(desc, categoryId) {
+  const kw = merchantKeyword(desc);
+  const cat = data.categories.find(c => c.id === categoryId);
+  if (!kw || !cat) return;
+  const already = (data.merchantRules || []).find(r => r.match === kw);
+  if (already && already.categoryId === categoryId) return; // nothing new to learn
+  const ok = await showConfirm(
+    `Always categorize <b>${escapeHtml(kw)}</b> as <b>${cat.icon} ${escapeHtml(cat.name)}</b>?<br><span class="text-slate-400 text-xs">Future entries and imports will use this automatically. Manage rules from the account menu.</span>`,
+    { confirmText: 'Always', cancelText: 'Not now' });
+  if (ok) { setMerchantRule(kw, categoryId); showToast('Rule saved ✓'); render(); }
 }
 
 function getGroupById(id) {
@@ -2010,6 +2061,29 @@ function buildSettings() {
       </div>
     </div>
 
+    <!-- Auto-categorization rules -->
+    <div class="card rounded-xl p-5">
+      <h3 class="font-semibold text-slate-200 mb-1">🏷️ Auto-categorization rules</h3>
+      <p class="text-xs text-slate-500 mb-3">When a merchant name contains your keyword, new entries and imports get that category automatically. Money Flies also offers to save a rule whenever you recategorize an expense.</p>
+      ${(data.merchantRules || []).length ? `
+        <div class="space-y-1.5 mb-3">
+          ${data.merchantRules.map(r => { const c = data.categories.find(x => x.id === r.categoryId); return `
+            <div class="flex items-center gap-2 text-sm bg-slate-800/60 rounded-lg px-3 py-2">
+              <span class="font-mono text-slate-200 truncate flex-1">${escapeHtml(r.match)}</span>
+              <span class="text-slate-500">→</span>
+              <span class="text-slate-300 truncate">${c ? `${c.icon} ${escapeHtml(c.name)}` : '— deleted —'}</span>
+              <button onclick="deleteMerchantRule('${r.id}')" class="text-slate-500 hover:text-red-400 ml-1 flex-shrink-0" title="Delete rule">🗑️</button>
+            </div>`; }).join('')}
+        </div>` : `<p class="text-xs text-slate-500 mb-3 italic">No custom rules yet — recategorize an expense and choose “Always” to create one.</p>`}
+      <div class="flex items-center gap-2 flex-wrap">
+        <input id="ruleMatchInput" placeholder="Keyword e.g. STARBUCKS" class="input-field rounded-lg px-3 py-2 text-sm flex-1 min-w-[140px]" />
+        <select id="ruleCatSelect" class="input-field rounded-lg px-2 py-2 text-sm">
+          ${data.categories.map(c => `<option value="${c.id}">${c.icon} ${escapeHtml(c.name)}</option>`).join('')}
+        </select>
+        <button onclick="addMerchantRuleFromForm()" class="btn-primary text-white rounded-lg px-4 py-2 text-sm font-medium">Add</button>
+      </div>
+    </div>
+
     <!-- Data -->
     <div class="card rounded-xl p-5">
       <h3 class="font-semibold text-slate-200 mb-3">💾 Data</h3>
@@ -3238,8 +3312,11 @@ function saveExpense(andAnother) {
   const isRecur = !editingExpense && recurEl && recurEl.value === 'on';
 
   if (editingExpense) {
+    const prevCat = editingExpense.categoryId;
     Object.assign(editingExpense, { description: desc, origAmount, currency, amount, date, categoryId, note, groupId, cardId });
-    saveData(data); showToast('Saved ✓'); closeExpenseModal(); return;
+    saveData(data); showToast('Saved ✓'); closeExpenseModal();
+    if (prevCat !== categoryId) offerMerchantRule(desc, categoryId); // learn from the correction
+    return;
   }
 
   if (isRecur) {
