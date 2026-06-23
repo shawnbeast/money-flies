@@ -223,6 +223,7 @@ let showWrapped = false; // monthly recap card
 let wrappedMonth = localMonthStr();
 let showImportTxnModal = false; // bank CSV importer
 let importTxnRows = null; // parsed rows awaiting import
+let importTxnSkipped = 0; // rows dropped during parse (bad date/amount, or income/credit rows)
 let showMenu = false; // "More" nav dropdown
 let showAccountMenu = false; // header account/data dropdown
 let adminData = null, adminLoading = false, adminError = null; // admin view cache
@@ -378,17 +379,30 @@ function payDatesInRange(p, from, to) {
   let d = new Date(p.startDate + 'T12:00:00');
   const end = new Date(to + 'T12:00:00');
   const start = new Date(from + 'T12:00:00');
-  // wind forward to at/after `from` without infinite loops
+  const anchorDay = d.getDate(); // keep the chosen day-of-month across all steps
+  // Two semimonthly paydays 15 days apart, derived from the start day.
+  const semi = anchorDay <= 15 ? [anchorDay, anchorDay + 15] : [anchorDay - 15, anchorDay];
+  // Advance dt by N months, pinning to `day` CLAMPED to the target month's last day.
+  // setFullYear(y, m, day) sets all fields atomically, so the day-31-on-a-30-day-month
+  // overflow (Jan 31 -> Mar 3, skipping Feb) that setMonth() causes can't happen.
+  const setClampedMonth = (dt, addMonths, day) => {
+    let m = dt.getMonth() + addMonths, y = dt.getFullYear();
+    y += Math.floor(m / 12); m = ((m % 12) + 12) % 12;
+    const lastDay = new Date(y, m + 1, 0).getDate();
+    dt.setFullYear(y, m, Math.min(day, lastDay));
+  };
   let guard = 0;
   const step = (dt) => {
     if (p.frequency === 'weekly') dt.setDate(dt.getDate() + 7);
     else if (p.frequency === 'biweekly') dt.setDate(dt.getDate() + 14);
-    else if (p.frequency === 'monthly') dt.setMonth(dt.getMonth() + 1);
-    else if (p.frequency === 'yearly') dt.setFullYear(dt.getFullYear() + 1);
+    else if (p.frequency === 'yearly') setClampedMonth(dt, 12, anchorDay);
     else if (p.frequency === 'semimonthly') {
-      // 1st and 15th-style: jump ~15 days alternating
-      if (dt.getDate() < 15) dt.setDate(15); else { dt.setMonth(dt.getMonth() + 1); dt.setDate(1); }
-    } else dt.setMonth(dt.getMonth() + 1);
+      const lastThis = new Date(dt.getFullYear(), dt.getMonth() + 1, 0).getDate();
+      const second = Math.min(semi[1], lastThis);
+      if (dt.getDate() < second) dt.setDate(second);   // -> second payday this month
+      else setClampedMonth(dt, 1, semi[0]);            // -> first payday next month
+    }
+    else setClampedMonth(dt, 1, anchorDay); // monthly (and any unknown frequency)
   };
   while (d < start && guard++ < 2000) step(d);
   guard = 0;
@@ -2546,7 +2560,7 @@ function buildCustomizeModal() {
 
 function buildImportTxnModal() {
   const rows = importTxnRows;
-  const total = rows ? rows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0) : 0;
+  const total = rows ? rows.reduce((s, r) => s + (Number(r.amount) || 0), 0) : 0;
   return `
   <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
     <div class="card rounded-2xl w-full max-w-md p-6 space-y-4 max-h-[90vh] overflow-y-auto scrollbar-thin" onclick="event.stopPropagation()">
@@ -2554,13 +2568,14 @@ function buildImportTxnModal() {
         <h2 class="font-semibold text-lg">📥 Import transactions</h2>
         <button onclick="closeImportTxnModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
       </div>
-      <p class="text-xs text-slate-400 -mt-2">Upload a CSV with columns: <b>date, description, amount, category</b>. Amounts are treated as ${data.baseCurrency}.</p>
+      <p class="text-xs text-slate-400 -mt-2">Works with most <b>bank CSVs</b> — flexible column names (Transaction Date, Amount, Debit/Credit, Memo…), $ / € symbols, comma decimals, and negative debits. Amounts import as ${data.baseCurrency} expenses; dates read as M/D/Y when ambiguous.</p>
       <input type="file" accept=".csv,text/csv" onchange="parseTxnFile(event)" class="input-field w-full rounded-lg px-3 py-2.5 text-sm" />
       ${rows ? `
         <div class="card rounded-lg p-3 text-sm">
           <p class="text-slate-200"><b>${rows.length}</b> transactions · total <b>${formatCurrency(total)}</b></p>
+          ${importTxnSkipped ? `<p class="text-[11px] text-amber-400/90 mt-0.5">${importTxnSkipped} row${importTxnSkipped > 1 ? 's' : ''} skipped (no valid date/amount, or income/credit rows).</p>` : ''}
           <div class="mt-2 max-h-32 overflow-y-auto scrollbar-thin text-xs text-slate-400 space-y-0.5">
-            ${rows.slice(0, 6).map(r => `<div class="flex justify-between gap-2"><span class="truncate">${escapeHtml(r.description)}</span><span>${formatCurrency(parseFloat(r.amount)||0)}</span></div>`).join('')}
+            ${rows.slice(0, 6).map(r => `<div class="flex justify-between gap-2"><span class="truncate">${escapeHtml(r.description)}</span><span>${formatCurrency(Number(r.amount)||0)}</span></div>`).join('')}
             ${rows.length > 6 ? `<div class="text-slate-500">+ ${rows.length - 6} more…</div>` : ''}
           </div>
         </div>
@@ -2581,11 +2596,66 @@ function buildImportTxnModal() {
           </div>
         </div>
         <button onclick="doImportTxns()" class="w-full btn-primary text-white rounded-lg py-2.5 text-sm font-semibold">Import ${rows.length} transactions</button>
-        <p class="text-[11px] text-slate-500">Duplicates (same date, description & amount) are skipped automatically.</p>
+        <p class="text-[11px] text-slate-500">Rows already in your expenses (same date, description & amount) are skipped; genuinely repeated charges are kept.</p>
       ` : ''}
       <button onclick="closeImportTxnModal()" class="w-full text-slate-400 hover:text-white rounded-lg py-2 text-sm">Cancel</button>
     </div>
   </div>`;
+}
+
+// Parse a money cell from a CSV into a Number (may be negative). Handles currency
+// symbols ($, €, "CAD"), thousands/decimal separators in either locale (1,234.56 and
+// 1.234,56 and 45,00), and parentheses/trailing-minus negatives. NaN if no number.
+function parseImportAmount(raw) {
+  if (raw == null) return NaN;
+  let s = String(raw).trim();
+  if (!s) return NaN;
+  const negative = /^\(.*\)$/.test(s) || /^-/.test(s) || /-$/.test(s);
+  s = s.replace(/[^\d.,]/g, ''); // drop symbols, letters, spaces, signs, parens
+  if (!s) return NaN;
+  const dec = Math.max(s.lastIndexOf('.'), s.lastIndexOf(','));
+  let normalized;
+  if (dec === -1) {
+    normalized = s;
+  } else if (s.length - dec - 1 >= 1 && s.length - dec - 1 <= 2) {
+    // rightmost separator has 1-2 trailing digits -> it's the decimal point
+    normalized = s.slice(0, dec).replace(/[.,]/g, '') + '.' + s.slice(dec + 1).replace(/[.,]/g, '');
+  } else {
+    normalized = s.replace(/[.,]/g, ''); // 0 or 3+ trailing digits -> grouping only
+  }
+  const n = parseFloat(normalized);
+  if (!isFinite(n)) return NaN;
+  return negative ? -Math.abs(n) : n;
+}
+
+// Normalize an imported date cell to a local YYYY-MM-DD string, or '' if unparseable.
+// Handles ISO, D/M/Y & M/D/Y (any of / - .), 2-digit years, and Excel serial numbers.
+function parseImportDate(raw) {
+  if (raw == null) return '';
+  const s = String(raw).trim();
+  if (!s) return '';
+  let m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/); // ISO-ish YYYY-MM-DD
+  if (m) return `${m[1]}-${String(+m[2]).padStart(2, '0')}-${String(+m[3]).padStart(2, '0')}`;
+  m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/); // D/M/Y or M/D/Y
+  if (m) {
+    let a = +m[1], b = +m[2], y = +m[3];
+    if (y < 100) y += 2000;
+    let mo, day;
+    if (a > 12 && b <= 12) { day = a; mo = b; }        // unambiguous D/M
+    else if (b > 12 && a <= 12) { mo = a; day = b; }   // unambiguous M/D
+    else { mo = a; day = b; }                          // ambiguous -> assume M/D/Y
+    if (mo >= 1 && mo <= 12 && day >= 1 && day <= 31)
+      return `${y}-${String(mo).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+  if (/^\d+(\.\d+)?$/.test(s)) { // Excel serial (days since 1899-12-30)
+    const serial = parseFloat(s);
+    if (serial > 59 && serial < 100000) {
+      const dt = new Date(Date.UTC(1899, 11, 30) + Math.round(serial) * 86400000);
+      return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`;
+    }
+  }
+  const dt = new Date(s); // fallback: "Jun 22, 2026" etc.
+  return isNaN(dt.getTime()) ? '' : localDateStr(dt);
 }
 
 function parseCSV(text) {
@@ -2612,14 +2682,48 @@ function parseTxnFile(event) {
       const grid = parseCSV(reader.result);
       if (!grid.length) throw new Error('Empty file');
       const header = grid[0].map(h => h.trim().toLowerCase());
-      const di = header.indexOf('date'), pi = header.indexOf('description'), ai = header.indexOf('amount'), ci = header.indexOf('category');
-      if (di < 0 || ai < 0) throw new Error('CSV needs at least date and amount columns.');
-      importTxnRows = grid.slice(1).map(c => ({
-        date: (c[di] || '').trim(),
-        description: (pi >= 0 ? c[pi] : '').trim() || 'Expense',
-        amount: (c[ai] || '').trim(),
-        category: (ci >= 0 ? c[ci] : '').trim().toLowerCase(),
-      })).filter(r => r.date && parseFloat(r.amount) > 0);
+      // Fuzzy "contains" matching so real bank headers work (Transaction Date,
+      // Amount (CAD), Details, Memo, Payee, separate Debit/Credit columns…).
+      const find = (...keys) => header.findIndex(h => keys.some(k => h.includes(k)));
+      const di = find('date');
+      const pi = find('description', 'desc', 'detail', 'memo', 'payee', 'narration', 'merchant', 'note');
+      const ai = find('amount', 'amt', 'value');
+      const debitI = header.findIndex(h => /debit|withdraw|paid out|outflow|money out/.test(h));
+      const creditI = header.findIndex(h => /credit|deposit|paid in|inflow|money in/.test(h));
+      const ci = find('category', 'cat');
+      if (di < 0) throw new Error('No date column found.');
+      if (ai < 0 && debitI < 0 && creditI < 0) throw new Error('No amount (or debit/credit) column found.');
+
+      const rawRows = grid.slice(1).filter(c => c.some(x => (x || '').trim() !== '')).map(c => {
+        let signed;
+        if (ai >= 0) signed = parseImportAmount(c[ai]);
+        else { // separate debit/credit columns: debit is money out (an expense)
+          const deb = debitI >= 0 ? parseImportAmount(c[debitI]) : NaN;
+          const cred = creditI >= 0 ? parseImportAmount(c[creditI]) : NaN;
+          signed = (isFinite(deb) && Math.abs(deb) > 0) ? -Math.abs(deb)
+                 : (isFinite(cred) && Math.abs(cred) > 0) ? Math.abs(cred) : NaN;
+        }
+        return {
+          date: parseImportDate(c[di]),
+          description: (pi >= 0 ? (c[pi] || '') : '').trim() || 'Expense',
+          signed,
+          category: (ci >= 0 ? (c[ci] || '') : '').trim().toLowerCase(),
+        };
+      });
+
+      // If the file uses signed amounts (real bank export), debits are negative and
+      // are the expenses; positive rows are deposits/income and are left out.
+      const hasNegatives = rawRows.some(r => isFinite(r.signed) && r.signed < 0);
+      let skipped = 0;
+      const rows = [];
+      rawRows.forEach(r => {
+        if (!r.date || !isFinite(r.signed) || r.signed === 0) { skipped++; return; }
+        if (hasNegatives && r.signed > 0) { skipped++; return; } // credit/deposit
+        rows.push({ date: r.date, description: r.description, amount: Math.abs(r.signed), category: r.category });
+      });
+      if (!rows.length) throw new Error('No importable rows found — check the date and amount columns.');
+      importTxnRows = rows;
+      importTxnSkipped = skipped;
       render();
     } catch (e) { showToast('Could not read CSV: ' + e.message, 'error'); }
   };
@@ -2631,14 +2735,16 @@ function doImportTxns() {
   const cardId = (document.getElementById('imp_card') || {}).value || null;
   const groupId = (document.getElementById('imp_trip') || {}).value || null;
   const known = new Set(data.categories.map(c => c.id));
-  const existing = new Set(data.expenses.map(e => `${e.date}|${e.description}|${(e.amount || 0).toFixed(2)}`));
-  let added = 0;
+  // Count existing occurrences per key so a re-import of an already-stored row is
+  // skipped, but two genuinely distinct same-day/same-amount rows both come in.
+  const seen = {};
+  data.expenses.forEach(e => { const k = `${e.date}|${e.description}|${(e.amount || 0).toFixed(2)}`; seen[k] = (seen[k] || 0) + 1; });
+  let added = 0, dups = 0;
   importTxnRows.forEach(r => {
-    const amt = parseFloat(r.amount) || 0;
+    const amt = Number(r.amount) || 0;
     if (!r.date || amt <= 0) return;
     const key = `${r.date}|${r.description}|${amt.toFixed(2)}`;
-    if (existing.has(key)) return;
-    existing.add(key);
+    if (seen[key] > 0) { seen[key]--; dups++; return; } // matches a row already stored
     data.expenses.push({
       id: uuid(), description: r.description, origAmount: amt, currency: data.baseCurrency, amount: amt,
       date: r.date, categoryId: (known.has(r.category) && r.category !== 'other') ? r.category : (autoGuessCategoryId(r.description) || (known.has(r.category) ? r.category : 'other')), cardId, groupId, note: '', createdAt: new Date().toISOString(),
@@ -2647,8 +2753,9 @@ function doImportTxns() {
   });
   saveData(data);
   importTxnRows = null;
+  importTxnSkipped = 0;
   showImportTxnModal = false;
-  showToast(`Imported ${added} ✓`);
+  showToast(`Imported ${added}${dups ? ` · ${dups} duplicate${dups > 1 ? 's' : ''} skipped` : ''} ✓`);
   activeTab = 'expenses';
   render();
 }
@@ -3020,8 +3127,8 @@ function closeCardModal() { showCardModal = false; editingCard = null; render();
 function closePayrollModal() { showPayrollModal = false; editingPayroll = null; render(); }
 function openCustomizeModal() { showCustomizeModal = true; showMenu = false; render(); }
 function closeCustomizeModal() { showCustomizeModal = false; render(); }
-function openImportTxnModal() { importTxnRows = null; showImportTxnModal = true; render(); }
-function closeImportTxnModal() { showImportTxnModal = false; importTxnRows = null; render(); }
+function openImportTxnModal() { importTxnRows = null; importTxnSkipped = 0; showImportTxnModal = true; render(); }
+function closeImportTxnModal() { showImportTxnModal = false; importTxnRows = null; importTxnSkipped = 0; render(); }
 function setAccent(id) { data.accent = id; saveData(data); applyTheme(); showToast('Theme updated ✓'); render(); }
 function saveDashboardLayout(layout) { const d = ensureDashboards(); d.layout = layout; saveData(data); }
 function toggleWidget(id) {
