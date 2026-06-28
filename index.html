@@ -1906,6 +1906,83 @@ function recurringMonthly(r) {
   }
 }
 
+// ─── Subscription detection ───────────────────────────────────────────────────
+// Find likely subscriptions: a merchant charged 3+ times, with a stable amount and a
+// regular cadence, that isn't already tracked as recurring. Sorted by annual cost.
+function detectSubscriptions() {
+  const tracked = new Set((data.recurringExpenses || []).map(r => merchantKeyword(r.description)));
+  const groups = {};
+  (data.expenses || []).forEach(e => {
+    if (e.recurringId) return;                 // already an auto-generated recurring entry
+    const kw = merchantKeyword(e.description);
+    if (!kw || tracked.has(kw)) return;
+    (groups[kw] = groups[kw] || []).push(e);
+  });
+  const cadenceOf = (g) => {
+    if (g >= 6 && g <= 8)     return ['weekly', 52 / 12];
+    if (g >= 12 && g <= 16)   return ['biweekly', 26 / 12];
+    if (g >= 26 && g <= 34)   return ['monthly', 1];
+    if (g >= 350 && g <= 380) return ['yearly', 1 / 12];
+    return null;
+  };
+  const out = [];
+  const today = localDateStr();
+  Object.entries(groups).forEach(([kw, exps]) => {
+    if (exps.length < 3) return;
+    const amts = exps.map(e => Math.abs(expenseBase(e))).sort((a, b) => a - b);
+    const median = amts[Math.floor(amts.length / 2)];
+    if (median <= 0) return;
+    if ((amts[amts.length - 1] - amts[0]) / median > 0.15) return;   // amounts too variable
+    const dates = exps.map(e => e.date).sort();
+    const gaps = [];
+    for (let i = 1; i < dates.length; i++)
+      gaps.push((new Date(dates[i] + 'T12:00:00') - new Date(dates[i - 1] + 'T12:00:00')) / 86400000);
+    const medianGap = gaps.slice().sort((a, b) => a - b)[Math.floor(gaps.length / 2)];
+    const cad = cadenceOf(medianGap);
+    if (!cad) return;
+    // Tolerate a single off cycle (one skipped period or a duplicate charge) instead of vetoing.
+    if (gaps.filter(g => Math.abs(g - medianGap) > medianGap * 0.5).length > 1) return;
+    let [frequency, factor] = cad;
+    // Distinguish twice-monthly (2 fixed days, 24/yr) from true biweekly (every 14d, 26/yr):
+    // genuine biweekly produces a 3-charge calendar month within a few cycles; semimonthly never does.
+    if (frequency === 'biweekly') {
+      const perMonth = {};
+      exps.forEach(e => { const k = e.date.slice(0, 7); perMonth[k] = (perMonth[k] || 0) + 1; });
+      if (!Object.values(perMonth).some(c => c >= 3)) { frequency = 'semimonthly'; factor = 2; }
+    }
+    const lastDate = dates[dates.length - 1];
+    // Skip stale/cancelled subscriptions (no charge for ~1.8 cycles) — don't suggest the dead.
+    const daysSinceLast = (new Date(today + 'T12:00:00') - new Date(lastDate + 'T12:00:00')) / 86400000;
+    if (daysSinceLast > medianGap * 1.8) return;
+    const repr = exps.slice().sort((a, b) => b.date.localeCompare(a.date))[0]; // most recent
+    const catCount = {}; exps.forEach(e => { catCount[e.categoryId] = (catCount[e.categoryId] || 0) + 1; });
+    const categoryId = Object.keys(catCount).sort((a, b) => catCount[b] - catCount[a])[0];
+    const monthly = median * factor;
+    out.push({ key: kw, description: repr.description, merchant: kw, amountBase: median,
+      currency: data.baseCurrency, cardId: repr.cardId || null, categoryId, frequency, count: exps.length,
+      monthly, annual: monthly * 12, lastDate });
+  });
+  return out.sort((a, b) => b.annual - a.annual);
+}
+
+// One-tap: promote a detected subscription to a tracked recurring expense.
+function trackSubscription(idx) {
+  const sub = detectSubscriptions()[idx];
+  if (!sub) { showToast('No longer detected', 'error'); return; }
+  // Start at the first occurrence ON OR AFTER today (anchored to the detected cadence) so we
+  // schedule forward only — never back-fill phantom past charges via generateRecurringExpenses.
+  const today = localDateStr();
+  const future = localDateStr(new Date(new Date(today + 'T12:00:00').getTime() + 86400000 * 400));
+  const startDate = payDatesInRange({ frequency: sub.frequency, startDate: sub.lastDate }, today, future)[0] || today;
+  data.recurringExpenses = data.recurringExpenses || [];
+  data.recurringExpenses.push({ id: uuid(), description: sub.description, amount: sub.amountBase, currency: data.baseCurrency,
+    frequency: sub.frequency, categoryId: sub.categoryId, startDate, cardId: sub.cardId, note: 'Detected subscription', active: true });
+  saveData(data);
+  generateRecurringExpenses();
+  showToast('Now tracking ' + sub.merchant + ' ✓');
+  render();
+}
+
 // ─── Budgets ──────────────────────────────────────────────────────────────────
 function buildBudgets() {
   const { byCategory } = getMonthTotals(activeMonth);
@@ -1992,6 +2069,38 @@ function buildBudgets() {
         <div class="px-5 py-3 border-t border-slate-700 flex justify-between items-center text-sm">
           <span class="text-slate-400">Fixed costs / month</span>
           <span class="font-bold text-red-400">${formatCurrency(monthlyTotal)}</span>
+        </div>
+      </div>`;
+    })()}
+
+    <!-- Detected subscriptions -->
+    ${(() => {
+      const subs = detectSubscriptions();
+      if (!subs.length) return '';
+      const totalAnnual = subs.reduce((s, x) => s + x.annual, 0);
+      return `
+      <div class="card rounded-xl overflow-hidden border border-amber-500/20">
+        <div class="px-5 py-4 border-b border-slate-700 flex items-center gap-3">
+          <span class="text-xl">🔎</span>
+          <div class="flex-1 min-w-0">
+            <h3 class="font-semibold text-slate-200">Detected subscriptions</h3>
+            <p class="text-xs text-slate-400">Recurring charges found in your history that aren't tracked yet — ${formatCurrency(totalAnnual)}/yr total.</p>
+          </div>
+        </div>
+        <div class="divide-y divide-slate-700/50">
+          ${subs.map((s, i) => { const cat = getCategoryById(s.categoryId); return `
+            <div class="flex items-center gap-4 px-5 py-3.5">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0" style="background:${cat.color}22">${cat.icon}</div>
+              <div class="flex-1 min-w-0">
+                <p class="font-medium text-slate-200 truncate">${escapeHtml(s.description)}</p>
+                <p class="text-xs text-slate-500">${freqLabel(s.frequency).split(' (')[0]} · ${s.count}× seen · ${formatCurrency(s.annual)}/yr</p>
+              </div>
+              <div class="text-right flex-shrink-0">
+                <p class="font-semibold text-slate-300">${formatCurrency(s.amountBase)}</p>
+                <p class="text-xs text-slate-500">${formatCurrency(s.monthly)}/mo</p>
+              </div>
+              <button onclick="trackSubscription(${i})" class="btn-primary text-white rounded-lg px-3 py-1.5 text-sm font-medium flex-shrink-0">Track</button>
+            </div>`; }).join('')}
         </div>
       </div>`;
     })()}
